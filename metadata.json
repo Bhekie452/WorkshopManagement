@@ -1,0 +1,7 @@
+{
+  "name": "AutoFlow Workshop Manager",
+  "description": "A comprehensive Workshop Management System featuring job cards, customer management, vehicle fleet tracking, and role-based access control.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

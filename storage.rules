@@ -1,0 +1,69 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+    
+    function isValidImageFile() {
+      return request.resource.contentType.matches('image/.*');
+    }
+    
+    function isValidPDFFile() {
+      return request.resource.contentType == 'application/pdf';
+    }
+    
+    function isValidFileSize(maxSizeMB) {
+      return request.resource.size < maxSizeMB * 1024 * 1024;
+    }
+    
+    // Customer attachments
+    match /customers/attachments/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidFileSize(10);
+      allow delete: if isAuthenticated();
+    }
+    
+    // Job attachments
+    match /jobs/attachments/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidFileSize(10);
+      allow delete: if isAuthenticated();
+    }
+    
+    // Vehicle photos
+    match /vehicles/photos/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidImageFile() && isValidFileSize(5);
+      allow delete: if isAuthenticated();
+    }
+    
+    // Invoices
+    match /invoices/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidPDFFile() && isValidFileSize(5);
+      allow delete: if isAuthenticated();
+    }
+    
+    // User avatars
+    match /users/avatars/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidImageFile() && isValidFileSize(2);
+      allow delete: if isAuthenticated();
+    }
+    
+    // Diagnostics files
+    match /diagnostics/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && isValidFileSize(10);
+      allow delete: if isAuthenticated();
+    }
+  }
+}
