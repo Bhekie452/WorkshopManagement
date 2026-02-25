@@ -95,10 +95,7 @@ const MOCK_INVOICES: Invoice[] = [
   }
 ];
 
-// Configuration
-const USE_FIRESTORE = false; // Set to true for production with Firebase
-
-// Local Storage Helper
+// ==================== LOCAL CACHE HELPERS ====================
 const get = <T>(key: string, initial: T): T => {
   const stored = localStorage.getItem(key);
   if (!stored) {
@@ -112,8 +109,74 @@ const set = <T>(key: string, data: T) => {
   localStorage.setItem(key, JSON.stringify(data));
 };
 
-// Consolidated Store Service - Uses localStorage with Firestore fallback
+// ==================== FIRESTORE PERSISTENCE (fire-and-forget) ====================
+const firestoreSave = (collection: string, id: string, data: any) => {
+  const { id: _id, ...docData } = data;
+  FirestoreService.createWithId(collection, id, docData).catch(err => {
+    console.warn(`[Store] Firestore write failed for ${collection}/${id}:`, err.message);
+  });
+};
+
+const firestoreUpdate = (collection: string, id: string, data: any) => {
+  const { id: _id, ...docData } = data;
+  FirestoreService.update(collection, id, docData).catch(err => {
+    console.warn(`[Store] Firestore update failed for ${collection}/${id}:`, err.message);
+  });
+};
+
+const firestoreDelete = (collection: string, id: string) => {
+  FirestoreService.delete(collection, id).catch(err => {
+    console.warn(`[Store] Firestore delete failed for ${collection}/${id}:`, err.message);
+  });
+};
+
+// ==================== INITIALIZATION ====================
+let _initialized = false;
+
+async function initializeStore(): Promise<void> {
+  if (_initialized) return;
+  console.log('[Store] Initializing — syncing from Firestore...');
+  try {
+    const [customers, vehicles, jobs, parts, appointments, invoices, diagnostics] = await Promise.all([
+      FirestoreService.getAll<Customer>(Collections.CUSTOMERS).catch(() => [] as Customer[]),
+      FirestoreService.getAll<Vehicle>(Collections.VEHICLES).catch(() => [] as Vehicle[]),
+      FirestoreService.getAll<Job>(Collections.JOBS).catch(() => [] as Job[]),
+      FirestoreService.getAll<Part>(Collections.PARTS).catch(() => [] as Part[]),
+      FirestoreService.getAll<Appointment>(Collections.APPOINTMENTS).catch(() => [] as Appointment[]),
+      FirestoreService.getAll<Invoice>(Collections.INVOICES).catch(() => [] as Invoice[]),
+      FirestoreService.getAll<DiagnosticRecord>(Collections.DIAGNOSTICS).catch(() => [] as DiagnosticRecord[]),
+    ]);
+
+    const seedIfEmpty = <T extends { id: string }>(items: T[], fallback: T[], cacheKey: string, collection: string) => {
+      if (items.length > 0) {
+        set(cacheKey, items);
+      } else {
+        set(cacheKey, fallback);
+        fallback.forEach(item => firestoreSave(collection, item.id, item));
+      }
+    };
+
+    seedIfEmpty(customers, MOCK_CUSTOMERS, 'customers', Collections.CUSTOMERS);
+    seedIfEmpty(vehicles, MOCK_VEHICLES, 'vehicles', Collections.VEHICLES);
+    seedIfEmpty(jobs, MOCK_JOBS, 'jobs', Collections.JOBS);
+    seedIfEmpty(parts, MOCK_PARTS, 'parts', Collections.PARTS);
+    seedIfEmpty(appointments, MOCK_APPOINTMENTS, 'appointments', Collections.APPOINTMENTS);
+    seedIfEmpty(invoices, MOCK_INVOICES, 'invoices', Collections.INVOICES);
+    seedIfEmpty(diagnostics, MOCK_DIAGNOSTICS, 'diagnostics', Collections.DIAGNOSTICS);
+
+    _initialized = true;
+    console.log('[Store] Firestore sync complete ✓');
+  } catch (error) {
+    console.warn('[Store] Firestore init failed, using localStorage cache:', error);
+    _initialized = true;
+  }
+}
+
+// ==================== STORE (sync reads, Firestore-backed writes) ====================
 export const store = {
+  init: initializeStore,
+  isInitialized: () => _initialized,
+
   // ==================== USERS ====================
   getUsers: () => MOCK_USERS,
   
@@ -131,8 +194,9 @@ export const store = {
   
   addCustomer: (c: Customer) => {
     const list = get<Customer[]>('customers', MOCK_CUSTOMERS);
-    const newItem = { ...c, id: Math.random().toString(36).substr(2, 9), attachments: [] };
+    const newItem = { ...c, id: c.id || Math.random().toString(36).substr(2, 9), attachments: c.attachments || [] };
     set('customers', [...list, newItem]);
+    firestoreSave(Collections.CUSTOMERS, newItem.id, newItem);
     return newItem;
   },
   
@@ -142,12 +206,14 @@ export const store = {
     if (index > -1) {
       list[index] = { ...list[index], ...data };
       set('customers', list);
+      firestoreUpdate(Collections.CUSTOMERS, id, data);
     }
   },
   
   deleteCustomer: (id: string) => {
     const list = get<Customer[]>('customers', MOCK_CUSTOMERS);
     set('customers', list.filter(c => c.id !== id));
+    firestoreDelete(Collections.CUSTOMERS, id);
   },
   
   addCustomerAttachment: (customerId: string, attachment: Attachment) => {
@@ -158,6 +224,7 @@ export const store = {
       c.attachments = [attachment, ...(c.attachments || [])];
       list[index] = c;
       set('customers', list);
+      firestoreUpdate(Collections.CUSTOMERS, customerId, { attachments: c.attachments });
     }
   },
 
@@ -180,6 +247,7 @@ export const store = {
       mileageHistory: v.mileageHistory || [{date: new Date().toISOString(), mileage: v.mileage, source: 'Initial Import'}] 
     };
     set('vehicles', [...list, newItem]);
+    firestoreSave(Collections.VEHICLES, newItem.id, newItem);
     return newItem;
   },
   
@@ -189,6 +257,7 @@ export const store = {
     if (index > -1) {
       list[index] = { ...list[index], ...data };
       set('vehicles', list);
+      firestoreUpdate(Collections.VEHICLES, id, data);
     }
   },
   
@@ -203,18 +272,17 @@ export const store = {
         mileage: newMileage,
         source: source
       };
-      list[index] = {
-        ...v,
-        mileage: newMileage,
-        mileageHistory: [newEntry, ...history]
-      };
+      const updatedData = { mileage: newMileage, mileageHistory: [newEntry, ...history] };
+      list[index] = { ...v, ...updatedData };
       set('vehicles', list);
+      firestoreUpdate(Collections.VEHICLES, vehicleId, updatedData);
     }
   },
 
   deleteVehicle: (id: string) => {
     const list = get<Vehicle[]>('vehicles', MOCK_VEHICLES);
     set('vehicles', list.filter(v => v.id !== id));
+    firestoreDelete(Collections.VEHICLES, id);
   },
 
   // ==================== JOBS ====================
@@ -239,6 +307,7 @@ export const store = {
       attachments: []
     };
     set('jobs', [newItem, ...list]);
+    firestoreSave(Collections.JOBS, newItem.id, newItem);
     return newItem;
   },
   
@@ -265,12 +334,14 @@ export const store = {
     if (index > -1) {
       list[index] = { ...list[index], ...updateData };
       set('jobs', list);
+      firestoreUpdate(Collections.JOBS, id, updateData);
     }
   },
 
   deleteJob: (id: string) => {
     const list = get<Job[]>('jobs', MOCK_JOBS);
     set('jobs', list.filter(j => j.id !== id));
+    firestoreDelete(Collections.JOBS, id);
   },
   
   // Job Activity
@@ -287,6 +358,7 @@ export const store = {
       };
       list[jobIndex].activityLog = [newLog, ...list[jobIndex].activityLog];
       set('jobs', list);
+      firestoreUpdate(Collections.JOBS, jobId, { activityLog: list[jobIndex].activityLog });
     }
   },
 
@@ -303,6 +375,7 @@ export const store = {
       };
       list[jobIndex].notifications = [newNotif, ...list[jobIndex].notifications];
       set('jobs', list);
+      firestoreUpdate(Collections.JOBS, jobId, { notifications: list[jobIndex].notifications });
     }
   },
 
@@ -314,6 +387,7 @@ export const store = {
       job.warranties = [...(job.warranties || []), w];
       list[jobIndex] = job;
       set('jobs', list);
+      firestoreUpdate(Collections.JOBS, w.jobId, { warranties: job.warranties });
     }
   },
 
@@ -325,6 +399,7 @@ export const store = {
       job.attachments = [attachment, ...(job.attachments || [])];
       list[jobIndex] = job;
       set('jobs', list);
+      firestoreUpdate(Collections.JOBS, jobId, { attachments: job.attachments });
     }
   },
 
@@ -335,6 +410,7 @@ export const store = {
     const list = get<Part[]>('parts', MOCK_PARTS);
     const newItem = { ...p, id: `PART-${Math.floor(Math.random() * 10000)}` };
     set('parts', [...list, newItem]);
+    firestoreSave(Collections.PARTS, newItem.id, newItem);
     return newItem;
   },
   
@@ -342,11 +418,13 @@ export const store = {
     const list = get<Part[]>('parts', MOCK_PARTS);
     const newList = list.map(p => p.id === updatedPart.id ? updatedPart : p);
     set('parts', newList);
+    firestoreUpdate(Collections.PARTS, updatedPart.id, updatedPart);
   },
 
   deletePart: (id: string) => {
     const list = get<Part[]>('parts', MOCK_PARTS);
     set('parts', list.filter(p => p.id !== id));
+    firestoreDelete(Collections.PARTS, id);
   },
 
   // ==================== DIAGNOSTICS ====================
@@ -356,12 +434,14 @@ export const store = {
     const list = get<DiagnosticRecord[]>('diagnostics', MOCK_DIAGNOSTICS);
     const newItem = { ...d, id: `DIAG-${Math.floor(Math.random() * 10000)}` };
     set('diagnostics', [newItem, ...list]);
+    firestoreSave(Collections.DIAGNOSTICS, newItem.id, newItem);
     return newItem;
   },
 
   deleteDiagnostic: (id: string) => {
     const list = get<DiagnosticRecord[]>('diagnostics', MOCK_DIAGNOSTICS);
     set('diagnostics', list.filter(d => d.id !== id));
+    firestoreDelete(Collections.DIAGNOSTICS, id);
   },
 
   // ==================== APPOINTMENTS ====================
@@ -371,6 +451,7 @@ export const store = {
     const list = get<Appointment[]>('appointments', MOCK_APPOINTMENTS);
     const newItem = { ...a, id: `APT-${Math.floor(Math.random() * 10000)}` };
     set('appointments', [...list, newItem]);
+    firestoreSave(Collections.APPOINTMENTS, newItem.id, newItem);
     return newItem;
   },
 
@@ -380,12 +461,14 @@ export const store = {
     if (index > -1) {
       list[index] = { ...list[index], ...data };
       set('appointments', list);
+      firestoreUpdate(Collections.APPOINTMENTS, id, data);
     }
   },
 
   deleteAppointment: (id: string) => {
     const list = get<Appointment[]>('appointments', MOCK_APPOINTMENTS);
     set('appointments', list.filter(a => a.id !== id));
+    firestoreDelete(Collections.APPOINTMENTS, id);
   },
 
   // ==================== INVOICES ====================
@@ -398,6 +481,7 @@ export const store = {
       id: i.id || (i.type === 'Quote' ? `QT-${Math.floor(Math.random() * 10000)}` : `INV-${Math.floor(Math.random() * 10000)}`) 
     };
     set('invoices', [newItem, ...list]);
+    firestoreSave(Collections.INVOICES, newItem.id, newItem);
     return newItem;
   },
   
@@ -407,12 +491,14 @@ export const store = {
     if (index > -1) {
       list[index] = { ...list[index], ...data };
       set('invoices', list);
+      firestoreUpdate(Collections.INVOICES, id, data);
     }
   },
 
   deleteInvoice: (id: string) => {
     const list = get<Invoice[]>('invoices', MOCK_INVOICES);
     set('invoices', list.filter(i => i.id !== id));
+    firestoreDelete(Collections.INVOICES, id);
   },
 
   // ==================== FILE UPLOAD HELPER ====================

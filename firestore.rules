@@ -31,66 +31,42 @@ service cloud.firestore {
     
     // Customers collection
     match /customers/{customerId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
     
     // Vehicles collection
     match /vehicles/{vehicleId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
     
     // Jobs collection
     match /jobs/{jobId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
     
     // Parts/Inventory collection
     match /parts/{partId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
     
     // Invoices collection
     match /invoices/{invoiceId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
     
     // Appointments collection
     match /appointments/{appointmentId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
     
     // Diagnostics collection
     match /diagnostics/{diagnosticId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
     
     // Warranties collection
     match /warranties/{warrantyId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isManagerOrAdmin();
+      allow read, write: if isAuthenticated();
     }
   }
 }

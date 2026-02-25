@@ -4,6 +4,7 @@ import {
     getDoc,
     getDocs,
     addDoc,
+    setDoc,
     updateDoc,
     deleteDoc,
     query,
@@ -63,7 +64,22 @@ export class FirestoreService {
         }
     }
 
-    // Update an existing document
+    // Create a new document with a specific ID
+    static async createWithId<T extends DocumentData>(collectionName: string, id: string, data: T): Promise<void> {
+        try {
+            const docRef = doc(db, collectionName, id);
+            await setDoc(docRef, {
+                ...data,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp()
+            });
+        } catch (error) {
+            console.error(`Error creating document ${id} in ${collectionName}:`, error);
+            throw error;
+        }
+    }
+
+    // Update an existing document (uses merge to create if missing)
     static async update<T extends DocumentData>(
         collectionName: string,
         id: string,
@@ -71,10 +87,10 @@ export class FirestoreService {
     ): Promise<void> {
         try {
             const docRef = doc(db, collectionName, id);
-            await updateDoc(docRef, {
+            await setDoc(docRef, {
                 ...data,
                 updatedAt: serverTimestamp()
-            });
+            }, { merge: true });
         } catch (error) {
             console.error(`Error updating document ${id} in ${collectionName}:`, error);
             throw error;

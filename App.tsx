@@ -142,6 +142,14 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [storeReady, setStoreReady] = useState(false);
+
+  // Initialize Firestore-backed store on mount
+  useEffect(() => {
+    store.init()
+      .then(() => setStoreReady(true))
+      .catch(() => setStoreReady(true)); // fallback to localStorage cache
+  }, []);
 
   // Check for session persistence
   useEffect(() => {
@@ -176,6 +184,15 @@ const App: React.FC = () => {
 
   if (!user) {
     return <Login onLogin={handleLogin} />;
+  }
+
+  if (!storeReady) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+        <p className="text-sm text-gray-400">Syncing data...</p>
+      </div>
+    );
   }
 
   return (
