@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Building2, Save, RotateCcw, MapPin, Phone, Mail, Globe, 
-  Clock, DollarSign, FileText, CreditCard, AlertCircle, CheckCircle2, X
+  Clock, DollarSign, FileText, CreditCard, AlertCircle, CheckCircle2, X,
+  UserCircle, Key, Shield
 } from 'lucide-react';
 import { companyProfile } from '../services/companyProfile';
 import { emailService } from '../services/emailService';
-import { CompanyProfile } from '../types';
+import { AuthService } from '../services/auth';
+import { CompanyProfile, User } from '../types';
 import { auth } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 
@@ -14,9 +16,12 @@ export const Settings: React.FC = () => {
   const [isAuthed, setIsAuthed] = useState(false);
   const [userUid, setUserUid] = useState<string | null>(null);
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
+  const [userProfile, setUserProfile] = useState<User | null>(null);
   const [saved, setSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState<'company' | 'banking' | 'hours' | 'invoice'>('company');
+  const [activeTab, setActiveTab] = useState<'personal' | 'company' | 'banking' | 'hours' | 'invoice'>('personal');
   const [showResetModal, setShowResetModal] = useState(false);
+  const [passwordResetSent, setPasswordResetSent] = useState(false);
+  const [savingUser, setSavingUser] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -33,10 +38,16 @@ export const Settings: React.FC = () => {
         }
         setUserUid(user.uid);
         try {
-          const p = await companyProfile.getProfile(user.uid);
-          if (mounted) setProfile(p);
+          const [p, userData] = await Promise.all([
+            companyProfile.getProfile(user.uid),
+            AuthService.getUserData(user.uid)
+          ]);
+          if (mounted) {
+            setProfile(p);
+            setUserProfile(userData);
+          }
         } catch (e) {
-          console.error('Failed to load company profile', e);
+          console.error('Failed to load profile data', e);
         }
       } else {
         setIsAuthed(false);
@@ -65,6 +76,32 @@ export const Settings: React.FC = () => {
       setTimeout(() => setSaved(false), 3000);
     } catch (e) {
       console.error('Failed to save profile', e);
+    }
+  };
+
+  const handleSavePersonal = async () => {
+    if (!userProfile || !userUid) return;
+    setSavingUser(true);
+    try {
+      const { id, ...data } = userProfile;
+      await AuthService.updateUser(userUid, data);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e) {
+      console.error('Failed to save personal details', e);
+    } finally {
+      setSavingUser(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!userProfile?.email) return;
+    try {
+      await AuthService.resetPassword(userProfile.email);
+      setPasswordResetSent(true);
+      setTimeout(() => setPasswordResetSent(false), 5000);
+    } catch (e) {
+      console.error('Failed to send password reset', e);
     }
   };
 
@@ -168,6 +205,17 @@ export const Settings: React.FC = () => {
       {/* Tabs */}
       <div className="flex gap-2 border-b border-gray-200">
         <button
+          onClick={() => setActiveTab('personal')}
+          className={`px-4 py-2 font-medium rounded-t-lg ${
+            activeTab === 'personal' 
+              ? 'bg-blue-600 text-white' 
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <UserCircle size={18} className="inline mr-2" />
+          Personal
+        </button>
+        <button
           onClick={() => setActiveTab('company')}
           className={`px-4 py-2 font-medium rounded-t-lg ${
             activeTab === 'company' 
@@ -212,6 +260,135 @@ export const Settings: React.FC = () => {
           Invoice
         </button>
       </div>
+
+      {/* Personal Details Tab */}
+      {activeTab === 'personal' && userProfile && (
+        <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-indigo-100 p-2 rounded-lg">
+              <UserCircle className="text-indigo-600" size={24} />
+            </div>
+            <h2 className="text-lg font-semibold">Personal Details</h2>
+          </div>
+
+          {/* Avatar & Name Preview */}
+          <div className="flex items-center gap-6 p-4 bg-gray-50 rounded-xl">
+            <img
+              src={userProfile.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(userProfile.name)}&background=random&size=128`}
+              alt={userProfile.name}
+              className="w-20 h-20 rounded-full object-cover border-4 border-white shadow"
+            />
+            <div>
+              <h3 className="text-xl font-bold text-gray-900">{userProfile.name}</h3>
+              <p className="text-gray-500">{userProfile.email}</p>
+              <span className="inline-block mt-1 px-3 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                {userProfile.role}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+              <input
+                type="text"
+                value={userProfile.name}
+                onChange={(e) => setUserProfile(prev => prev ? { ...prev, name: e.target.value } : prev)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+              <input
+                type="email"
+                value={userProfile.email}
+                disabled
+                className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
+              />
+              <p className="text-xs text-gray-400 mt-1">Email cannot be changed here</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
+              <div className="relative">
+                <Phone size={16} className="absolute left-3 top-3 text-gray-400" />
+                <input
+                  type="tel"
+                  value={userProfile.phone || ''}
+                  onChange={(e) => setUserProfile(prev => prev ? { ...prev, phone: e.target.value } : prev)}
+                  className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  placeholder="082 000 0000"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+              <div className="relative">
+                <Shield size={16} className="absolute left-3 top-3 text-gray-400" />
+                <input
+                  type="text"
+                  value={userProfile.role}
+                  disabled
+                  className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500 cursor-not-allowed"
+                />
+              </div>
+              <p className="text-xs text-gray-400 mt-1">Contact admin to change role</p>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Bio / Notes</label>
+            <textarea
+              value={userProfile.bio || ''}
+              onChange={(e) => setUserProfile(prev => prev ? { ...prev, bio: e.target.value } : prev)}
+              rows={3}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="A short description about yourself..."
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Avatar URL</label>
+            <input
+              type="url"
+              value={userProfile.avatar || ''}
+              onChange={(e) => setUserProfile(prev => prev ? { ...prev, avatar: e.target.value } : prev)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              placeholder="https://example.com/avatar.jpg"
+            />
+            <p className="text-xs text-gray-400 mt-1">Leave empty for auto-generated avatar</p>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-between border-t pt-6 mt-6">
+            <div>
+              <button
+                onClick={handlePasswordReset}
+                className="flex items-center gap-2 px-4 py-2 text-orange-700 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors"
+              >
+                <Key size={18} />
+                Send Password Reset Email
+              </button>
+              {passwordResetSent && (
+                <p className="text-sm text-green-600 mt-2 flex items-center gap-1">
+                  <CheckCircle2 size={14} /> Reset link sent to {userProfile.email}
+                </p>
+              )}
+            </div>
+
+            <button
+              onClick={handleSavePersonal}
+              disabled={savingUser}
+              className="flex items-center gap-2 px-6 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              <Save size={18} />
+              {savingUser ? 'Saving...' : 'Save Personal Details'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Company Info Tab */}
       {activeTab === 'company' && (

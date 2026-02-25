@@ -79,6 +79,23 @@ export class AuthService {
         }
     }
 
+    // Update user profile (name, phone, bio, avatar)
+    static async updateUser(uid: string, data: Partial<Omit<User, 'id'>>): Promise<void> {
+        try {
+            // Update Firestore user document
+            const docRef = doc(db, Collections.USERS, uid);
+            await setDoc(docRef, data, { merge: true });
+
+            // If name changed, also update Firebase Auth displayName
+            if (data.name && auth.currentUser) {
+                await updateProfile(auth.currentUser, { displayName: data.name });
+            }
+        } catch (error: any) {
+            console.error('Update user error:', error);
+            throw new Error('Failed to update profile');
+        }
+    }
+
     // Send password reset email
     static async resetPassword(email: string): Promise<void> {
         try {
