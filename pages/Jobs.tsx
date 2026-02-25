@@ -267,6 +267,30 @@ export const Jobs: React.FC = () => {
       }
   };
 
+  const removePartFromJob = (partUsageId: string) => {
+      const partToRemove = formData.partsUsed?.find(p => p.id === partUsageId);
+      if (!partToRemove) return;
+      const updatedParts = (formData.partsUsed || []).filter(p => p.id !== partUsageId);
+      const newEstimate = Math.max(0, (formData.estimatedCost || 0) - partToRemove.totalCost);
+      setFormData({ ...formData, partsUsed: updatedParts, estimatedCost: newEstimate });
+      if (selectedJob) {
+          store.updateJob(selectedJob.id, { partsUsed: updatedParts, estimatedCost: newEstimate });
+          store.addJobLog(selectedJob.id, 'Part Removed', `Removed ${partToRemove.name} from job card`);
+      }
+  };
+
+  const removeLabourFromJob = (labourId: string) => {
+      const labourToRemove = formData.laborLog?.find(l => l.id === labourId);
+      if (!labourToRemove) return;
+      const updatedLabor = (formData.laborLog || []).filter(l => l.id !== labourId);
+      const newEstimate = Math.max(0, (formData.estimatedCost || 0) - labourToRemove.totalCost);
+      setFormData({ ...formData, laborLog: updatedLabor, estimatedCost: newEstimate });
+      if (selectedJob) {
+          store.updateJob(selectedJob.id, { laborLog: updatedLabor, estimatedCost: newEstimate });
+          store.addJobLog(selectedJob.id, 'Labor Removed', `Removed ${labourToRemove.description} from job card`);
+      }
+  };
+
   const sendNotification = async (type: 'SMS' | 'WHATSAPP' | 'EMAIL', template: string) => {
     if (!selectedJob) return;
     
@@ -780,22 +804,32 @@ export const Jobs: React.FC = () => {
                                               <th className="p-3 rounded-l-lg">Item</th>
                                               <th className="p-3">Qty</th>
                                               <th className="p-3">Unit</th>
-                                              <th className="p-3 rounded-r-lg text-right">Total</th>
+                                              <th className="p-3 text-right">Total</th>
+                                              <th className="p-3 rounded-r-lg w-10"></th>
                                           </tr>
                                       </thead>
                                       <tbody>
                                           {formData.partsUsed?.map(p => (
-                                              <tr key={p.id} className="border-b border-gray-50">
+                                              <tr key={p.id} className="border-b border-gray-50 group">
                                                   <td className="p-3 font-medium">{p.name}</td>
                                                   <td className="p-3">{p.quantity}</td>
                                                   <td className="p-3">R{p.unitCost}</td>
                                                   <td className="p-3 text-right">R{p.totalCost}</td>
+                                                  <td className="p-3 text-center">
+                                                      <button
+                                                          onClick={() => removePartFromJob(p.id)}
+                                                          className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                          title="Remove part"
+                                                      >
+                                                          <Trash2 size={15} />
+                                                      </button>
+                                                  </td>
                                               </tr>
                                           ))}
                                       </tbody>
                                       <tfoot>
                                           <tr>
-                                              <td colSpan={3} className="p-3 text-right font-bold text-gray-900">Total Parts:</td>
+                                              <td colSpan={4} className="p-3 text-right font-bold text-gray-900">Total Parts:</td>
                                               <td className="p-3 text-right font-bold text-blue-600">
                                                   R{(formData.partsUsed?.reduce((a, b) => a + b.totalCost, 0) || 0).toLocaleString()}
                                               </td>
@@ -815,14 +849,23 @@ export const Jobs: React.FC = () => {
                                   {formData.laborLog && formData.laborLog.length > 0 ? (
                                       <div className="space-y-3">
                                           {formData.laborLog.map((labour) => (
-                                              <div key={labour.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                                              <div key={labour.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg group">
                                                   <div>
                                                       <p className="font-medium text-gray-900">{labour.description}</p>
                                                       <p className="text-sm text-gray-500">{labour.technicianName} • {labour.hours}h @ R{labour.ratePerHour}/hr</p>
                                                   </div>
-                                                  <div className="text-right">
-                                                      <p className="font-bold text-gray-900">R{labour.totalCost.toLocaleString()}</p>
-                                                      <p className="text-xs text-gray-500">{new Date(labour.date).toLocaleDateString()}</p>
+                                                  <div className="flex items-center gap-3">
+                                                      <div className="text-right">
+                                                          <p className="font-bold text-gray-900">R{labour.totalCost.toLocaleString()}</p>
+                                                          <p className="text-xs text-gray-500">{new Date(labour.date).toLocaleDateString()}</p>
+                                                      </div>
+                                                      <button
+                                                          onClick={() => removeLabourFromJob(labour.id)}
+                                                          className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                          title="Remove labour entry"
+                                                      >
+                                                          <Trash2 size={15} />
+                                                      </button>
                                                   </div>
                                               </div>
                                           ))}
