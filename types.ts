@@ -1,4 +1,3 @@
-
 export enum UserRole {
   ADMIN = 'ADMIN',
   MANAGER = 'MANAGER',
@@ -192,7 +191,7 @@ export interface Appointment {
 }
 
 export interface InvoiceItem {
-  id: string;
+  id:string;
   description: string;
   quantity: number;
   unitPrice: number;
@@ -219,4 +218,48 @@ export interface Invoice {
 export interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
+}
+
+export interface CompanyProfile {
+  id: string;
+  name: string;
+  tagline?: string;
+  registrationNumber?: string;
+  vatNumber?: string;
+  address: {
+    street: string;
+    city: string;
+    province: string;
+    postalCode: string;
+    country: string;
+  };
+  contact: {
+    phone: string;
+    alternativePhone?: string;
+    email: string;
+    website?: string;
+  };
+  banking: {
+    bankName: string;
+    accountName: string;
+    accountNumber: string;
+    branchCode: string;
+    accountType: string;
+  };
+  operatingHours: {
+    monday: { open: string; close: string; closed: boolean };
+    tuesday: { open: string; close: string; closed: boolean };
+    wednesday: { open: string; close: string; closed: boolean };
+    thursday: { open: string; close: string; closed: boolean };
+    friday: { open: string; close: string; closed: boolean };
+    saturday: { open: string; close: string; closed: boolean };
+    sunday: { open: string; close: string; closed: boolean };
+  };
+  logo?: string;
+  defaultTaxRate: number;
+  defaultPaymentTerms: number; // days
+  invoicePrefix: string;
+  quotePrefix: string;
+  createdAt: string;
+  updatedAt: string;
 }

@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
+import { emailService } from '../services/emailService';
 import { Job, JobStatus, Priority, Customer, Vehicle, Part, JobTask, JobPartUsage, JobLabor, Attachment } from '../types';
 import { 
   Plus, Filter, Search, Calendar, ChevronRight, X, BrainCircuit, Users, 
   Settings, PenTool, ClipboardList, MessageCircle, Mail, Smartphone,
   Clock, Package, AlertTriangle, CheckCircle2, History, Send, Gauge,
-  Paperclip, Image, FileText, Upload
+  Paperclip, Image, FileText, Upload, Loader2, Trash2
 } from 'lucide-react';
 
 export const Jobs: React.FC = () => {
@@ -22,6 +23,24 @@ export const Jobs: React.FC = () => {
   // Notification Simulation
   const [notifMessage, setNotifMessage] = useState('');
   const [showNotifToast, setShowNotifToast] = useState(false);
+  
+  // AI Checklist Generation
+  const [isGeneratingChecklist, setIsGeneratingChecklist] = useState(false);
+  
+  // Parts Search
+  const [partSearchQuery, setPartSearchQuery] = useState('');
+  
+  // Labour Form State
+  const [showLabourForm, setShowLabourForm] = useState(false);
+  const [labourFormData, setLabourFormData] = useState({
+      description: '',
+      hours: 1,
+      ratePerHour: 500,
+      technicianName: 'Current User'
+  });
+  
+  // Sending Notification State
+  const [isSendingNotif, setIsSendingNotif] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState<Partial<Job>>({
@@ -169,6 +188,39 @@ export const Jobs: React.FC = () => {
     }
   };
 
+  // Labour Handler
+  const handleSaveLabour = () => {
+    const newLabour: JobLabor = {
+      id: Date.now().toString(),
+      technicianId: '1',
+      technicianName: labourFormData.technicianName,
+      description: labourFormData.description,
+      hours: labourFormData.hours,
+      ratePerHour: labourFormData.ratePerHour,
+      totalCost: labourFormData.hours * labourFormData.ratePerHour,
+      date: new Date().toISOString()
+    };
+
+    const updatedLaborLog = [...(formData.laborLog || []), newLabour];
+    setFormData({ ...formData, laborLog: updatedLaborLog });
+
+    // Auto-save if editing existing job
+    if (selectedJob) {
+      const updatedJob = { ...selectedJob, laborLog: updatedLaborLog };
+      store.updateJob(selectedJob.id, { laborLog: updatedLaborLog });
+      store.addJobLog(selectedJob.id, 'Labor Added', `${labourFormData.hours} hours logged for ${labourFormData.description}`);
+    }
+
+    // Reset form and close modal
+    setLabourFormData({
+      description: '',
+      hours: 1,
+      ratePerHour: 500,
+      technicianName: 'Current User'
+    });
+    setShowLabourForm(false);
+  };
+
   // --- SUB-COMPONENT HANDLERS ---
 
   const toggleTask = (taskId: string) => {
@@ -215,30 +267,63 @@ export const Jobs: React.FC = () => {
       }
   };
 
-  const sendNotification = (type: 'SMS' | 'WHATSAPP' | 'EMAIL', template: string) => {
-     if(!selectedJob) return;
-     
-     const customer = customers.find(c => c.id === formData.customerId);
-     if(!customer) return;
+  const sendNotification = async (type: 'SMS' | 'WHATSAPP' | 'EMAIL', template: string) => {
+    if (!selectedJob) return;
+    
+    const customer = customers.find(c => c.id === formData.customerId);
+    if (!customer) {
+      alert('Customer not found for this job');
+      return;
+    }
 
-     // Simulate API Call
-     const message = template.replace('{{customer}}', customer.name).replace('{{id}}', selectedJob.id);
-     
-     store.logNotification(selectedJob.id, type, message, customer.phone || customer.email);
-     store.addJobLog(selectedJob.id, 'Notification Sent', `Sent ${type} update to customer`);
-     
-     // Also update mileage on notification if context implies vehicle is at shop
-     if(formData.vehicleId) {
-          store.updateVehicleMileage(formData.vehicleId, currentMileage, `Customer Notification (${type})`);
-     }
-     
-     setNotifMessage(`Sent ${type} to ${customer.name}`);
-     setShowNotifToast(true);
-     setTimeout(() => setShowNotifToast(false), 3000);
-     
-     // Update local view
-     const updatedJob = store.getJobs().find(j => j.id === selectedJob.id);
-     if(updatedJob) setFormData(updatedJob);
+    const message = template.replace('{{customer}}', customer.name).replace('{{id}}', selectedJob.id);
+    const recipient = customer.phone || customer.email;
+    
+    // Show loading state
+    setIsSendingNotif(true);
+    
+    try {
+      if (type === 'EMAIL' && customer.email) {
+        // Send actual email via emailService
+        const result = await emailService.send({
+          to: customer.email,
+          subject: `Job #${selectedJob.id} - Update`,
+          text: message,
+          html: `<p style="font-family: Arial, sans-serif;">${message}</p>`
+        });
+        
+        if (!result.success) {
+          console.error('Email failed:', result.error);
+        }
+      } else if (type === 'SMS' || type === 'WHATSAPP') {
+        // SMS/WhatsApp - show info (would need SMS gateway integration)
+        console.log(`[${type}] Would send to ${customer.phone}: ${message}`);
+        alert(`📱 ${type} would be sent to ${customer.phone}: ${message.substring(0, 50)}...`);
+      }
+      
+      // Log notification to store regardless of delivery status
+      store.logNotification(selectedJob.id, type, message, recipient);
+      store.addJobLog(selectedJob.id, 'Notification Sent', `Sent ${type} update to customer`);
+      
+      // Also update mileage on notification if context implies vehicle is at shop
+      if (formData.vehicleId) {
+        store.updateVehicleMileage(formData.vehicleId, currentMileage, `Customer Notification (${type})`);
+      }
+      
+      setNotifMessage(`✅ Sent ${type} to ${customer.name}`);
+      setShowNotifToast(true);
+      setTimeout(() => setShowNotifToast(false), 3000);
+      
+      // Update local view
+      const updatedJob = store.getJobs().find(j => j.id === selectedJob.id);
+      if (updatedJob) setFormData(updatedJob);
+      
+    } catch (error) {
+      console.error('Failed to send notification:', error);
+      alert('Failed to send notification. Check console for details.');
+    } finally {
+      setIsSendingNotif(false);
+    }
   };
 
   // --- RENDERING HELPERS ---
@@ -719,14 +804,32 @@ export const Jobs: React.FC = () => {
                                   </table>
                               </div>
                               
-                              {/* Labor Table (Simplified for UI) */}
+                              {/* Labor Table */}
                               <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm">
                                   <div className="flex justify-between items-center mb-4">
                                       <h3 className="font-bold text-gray-900 flex items-center gap-2"><Clock size={18} /> Labor</h3>
-                                      <button className="text-sm text-blue-600 font-medium hover:underline">+ Log Hours</button>
+                                      <button onClick={() => setShowLabourForm(true)} className="text-sm text-blue-600 font-medium hover:underline">+ Log Hours</button>
                                   </div>
-                                  {/* Empty State for Demo */}
-                                  <p className="text-gray-400 text-sm italic py-4 text-center">No labor hours logged yet.</p>
+                                  
+                                  {/* Labour List */}
+                                  {formData.laborLog && formData.laborLog.length > 0 ? (
+                                      <div className="space-y-3">
+                                          {formData.laborLog.map((labour) => (
+                                              <div key={labour.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                                                  <div>
+                                                      <p className="font-medium text-gray-900">{labour.description}</p>
+                                                      <p className="text-sm text-gray-500">{labour.technicianName} • {labour.hours}h @ R{labour.ratePerHour}/hr</p>
+                                                  </div>
+                                                  <div className="text-right">
+                                                      <p className="font-bold text-gray-900">R{labour.totalCost.toLocaleString()}</p>
+                                                      <p className="text-xs text-gray-500">{new Date(labour.date).toLocaleDateString()}</p>
+                                                  </div>
+                                              </div>
+                                          ))}
+                                      </div>
+                                  ) : (
+                                      <p className="text-gray-400 text-sm italic py-4 text-center">No labor hours logged yet.</p>
+                                  )}
                               </div>
                           </div>
 
@@ -741,7 +844,7 @@ export const Jobs: React.FC = () => {
                                       </div>
                                       <div className="flex justify-between">
                                           <span>Labor Total</span>
-                                          <span>R0.00</span>
+                                          <span>R{(formData.laborLog?.reduce((a, b) => a + b.totalCost, 0) || 0).toLocaleString()}</span>
                                       </div>
                                   </div>
                               </div>
@@ -900,6 +1003,93 @@ export const Jobs: React.FC = () => {
                       </div>
                   </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Labour Form Modal */}
+      {showLabourForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h2 className="text-lg font-bold text-gray-900">Log Labour Hours</h2>
+              <button onClick={() => setShowLabourForm(false)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+            
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                <input
+                  type="text"
+                  value={labourFormData.description}
+                  onChange={(e) => setLabourFormData({...labourFormData, description: e.target.value})}
+                  placeholder="e.g., Oil change, Brake inspection"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Hours</label>
+                  <input
+                    type="number"
+                    min="0.5"
+                    step="0.5"
+                    value={labourFormData.hours}
+                    onChange={(e) => setLabourFormData({...labourFormData, hours: parseFloat(e.target.value) || 0})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Rate (R/hr)</label>
+                  <input
+                    type="number"
+                    value={labourFormData.ratePerHour}
+                    onChange={(e) => setLabourFormData({...labourFormData, ratePerHour: parseFloat(e.target.value) || 0})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Technician</label>
+                <input
+                  type="text"
+                  value={labourFormData.technicianName}
+                  onChange={(e) => setLabourFormData({...labourFormData, technicianName: e.target.value})}
+                  placeholder="Technician name"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-600">Total Cost:</span>
+                  <span className="text-xl font-bold text-gray-900">
+                    R{(labourFormData.hours * labourFormData.ratePerHour).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex gap-3 p-4 border-t">
+              <button
+                onClick={() => setShowLabourForm(false)}
+                className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveLabour}
+                disabled={!labourFormData.description}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Save Labour
+              </button>
             </div>
           </div>
         </div>

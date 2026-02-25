@@ -1,24 +1,18 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Invoice, Customer, Vehicle } from '../types';
+import { Invoice, Customer, Vehicle, CompanyProfile } from '../types';
 
-interface WorkshopProfile {
-    name: string;
-    address: string;
-    phone: string;
-    email: string;
-    vatNumber: string;
-    logo: string;
-}
-
-// Define Workshop Profile locally if not imported
-const DEFAULT_WORKSHOP: WorkshopProfile = {
-    name: 'AutoFlow Workshop',
-    address: '123 Mechanic Lane, Tech City, 2000',
-    phone: '011 555 1234',
-    email: 'service@autoflow.com',
-    vatNumber: 'VAT-99887766',
-    logo: '/wms-logo1.png'
+// Fallback workshop details when no profile is loaded
+const DEFAULT_WORKSHOP = {
+    name: 'My Workshop',
+    address: '123 Main Street, Johannesburg, 2000',
+    phone: '011 555 0000',
+    email: 'info@workshop.co.za',
+    vatNumber: '',
+    bankName: 'First National Bank',
+    accountName: 'My Workshop',
+    accountNumber: '1234567890',
+    branchCode: '250655',
 };
 
 // Local currency formatter if import fails
@@ -30,19 +24,36 @@ const formatMoney = (amount: number) => {
 };
 
 export class PDFService {
-    static async generateInvoice(invoice: Invoice, customer: Customer, vehicle: Vehicle): Promise<void> {
+    static async generateInvoice(invoice: Invoice, customer: Customer, vehicle: Vehicle | undefined, profile?: CompanyProfile): Promise<void> {
         const doc = new jsPDF();
+
+        // Resolve company details from profile or fallback
+        const company = profile ? {
+            name: profile.name,
+            address: `${profile.address.street}, ${profile.address.city}, ${profile.address.province} ${profile.address.postalCode}`,
+            phone: profile.contact.phone,
+            email: profile.contact.email,
+            vatNumber: profile.vatNumber ?? '',
+            bankName: profile.banking.bankName,
+            accountName: profile.banking.accountName,
+            accountNumber: profile.banking.accountNumber,
+            branchCode: profile.banking.branchCode,
+        } : DEFAULT_WORKSHOP;
+
+        const taxRate = profile?.defaultTaxRate ?? 15;
 
         // --- Header ---
         doc.setFontSize(22);
         doc.setTextColor(40, 40, 40);
-        doc.text(DEFAULT_WORKSHOP.name, 14, 20);
+        doc.text(company.name, 14, 20);
 
         doc.setFontSize(10);
         doc.setTextColor(100, 100, 100);
-        doc.text(DEFAULT_WORKSHOP.address, 14, 26);
-        doc.text(`Tel: ${DEFAULT_WORKSHOP.phone} | Email: ${DEFAULT_WORKSHOP.email}`, 14, 31);
-        doc.text(`VAT No: ${DEFAULT_WORKSHOP.vatNumber}`, 14, 36);
+        doc.text(company.address, 14, 26);
+        doc.text(`Tel: ${company.phone} | Email: ${company.email}`, 14, 31);
+        if (company.vatNumber) {
+            doc.text(`VAT No: ${company.vatNumber}`, 14, 36);
+        }
 
         // --- Invoice Details ---
         doc.setFontSize(16);
@@ -109,7 +120,7 @@ export class PDFService {
         doc.text('Subtotal:', 140, finalY, { align: 'right' });
         doc.text(formatMoney(invoice.subtotal), 190, finalY, { align: 'right' });
 
-        doc.text(`Tax (${DEFAULT_WORKSHOP.vatNumber ? '15%' : '0%'}):`, 140, finalY + 6, { align: 'right' });
+        doc.text(`Tax (${taxRate}%):`, 140, finalY + 6, { align: 'right' });
         doc.text(formatMoney(invoice.taxAmount), 190, finalY + 6, { align: 'right' });
 
         doc.setFontSize(12);
@@ -123,7 +134,7 @@ export class PDFService {
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(150, 150, 150);
         doc.text('Thank you for your business!', 105, pageHeight - 20, { align: 'center' });
-        doc.text('Bank Details: Standard Bank | Acc: 123456789 | Branch: 051001', 105, pageHeight - 15, { align: 'center' });
+        doc.text(`Bank: ${company.bankName} | Account: ${company.accountName} | Acc No: ${company.accountNumber} | Branch: ${company.branchCode}`, 105, pageHeight - 15, { align: 'center' });
 
         // Save
         doc.save(`Invoice_${invoice.number}.pdf`);

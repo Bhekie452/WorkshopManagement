@@ -2,25 +2,15 @@ import React, { useState, useRef, useEffect } from 'react';
 import { store } from '../services/store'; // Changed to storeV2
 import { PDFService } from '../services/pdf';
 import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2 } from 'lucide-react';
-import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer } from '../types';
-
-// Company Details for Invoice Header
-const COMPANY_DETAILS = {
-  name: 'AutoFlow Workshop',
-  address: '123 Mechanic Lane, Tech City, 8001',
-  phone: '+27 82 555 1234',
-  email: 'accounts@autoflow.co.za',
-  vat: '4880123456',
-  bankName: 'First National Bank',
-  accountNumber: '62000000000',
-  branchCode: '250655'
-};
+import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer, CompanyProfile } from '../types';
+import { companyProfile as companyProfileService } from '../services/companyProfile';
 
 export const Sales: React.FC = () => {
   const [salesDocs, setSalesDocs] = useState<Invoice[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [workshopProfile, setWorkshopProfile] = useState<CompanyProfile | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -50,16 +40,18 @@ export const Sales: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [fetchedDocs, fetchedCustomers, fetchedVehicles, fetchedJobs] = await Promise.all([
+      const [fetchedDocs, fetchedCustomers, fetchedVehicles, fetchedJobs, profile] = await Promise.all([
         store.getInvoices(),
         store.getCustomers(),
         store.getVehicles(),
-        store.getJobs()
+        store.getJobs(),
+        companyProfileService.getProfile().catch(() => null)
       ]);
       setSalesDocs(fetchedDocs);
       setCustomers(fetchedCustomers);
       setVehicles(fetchedVehicles);
       setJobs(fetchedJobs);
+      if (profile) setWorkshopProfile(profile);
     } catch (error) {
       console.error("Failed to load data", error);
       alert("Failed to load data. Please check connection.");
@@ -108,7 +100,7 @@ export const Sales: React.FC = () => {
     const vehicle = vehicles.find(v => v.id === doc.vehicleId);
 
     if (customer) {
-      await PDFService.generateInvoice(doc, customer, vehicle);
+      await PDFService.generateInvoice(doc, customer, vehicle, workshopProfile ?? undefined);
     } else {
       alert('Cannot generate PDF: Customer details not found.');
     }
@@ -887,14 +879,14 @@ export const Sales: React.FC = () => {
                   <div>
                     {/* Replace with actual Logo */}
                     <div className="h-16 w-48 bg-slate-900 flex items-center justify-center text-white font-bold text-xl mb-4">
-                      AUTOFLOW
+                      {workshopProfile?.name?.substring(0, 10).toUpperCase() ?? 'WORKSHOP'}
                     </div>
                     <div className="text-sm text-gray-600 space-y-1">
-                      <p className="font-bold text-gray-900">{COMPANY_DETAILS.name}</p>
-                      <p>{COMPANY_DETAILS.address}</p>
-                      <p>Phone: {COMPANY_DETAILS.phone}</p>
-                      <p>Email: {COMPANY_DETAILS.email}</p>
-                      <p>VAT Reg: {COMPANY_DETAILS.vat}</p>
+                      <p className="font-bold text-gray-900">{workshopProfile?.name ?? 'My Workshop'}</p>
+                      <p>{workshopProfile ? `${workshopProfile.address.street}, ${workshopProfile.address.city}` : ''}</p>
+                      <p>Phone: {workshopProfile?.contact.phone ?? ''}</p>
+                      <p>Email: {workshopProfile?.contact.email ?? ''}</p>
+                      {workshopProfile?.vatNumber && <p>VAT Reg: {workshopProfile.vatNumber}</p>}
                     </div>
                   </div>
                   <div className="text-right">
@@ -1001,16 +993,16 @@ export const Sales: React.FC = () => {
                   <div className="grid grid-cols-2 gap-8 text-xs text-gray-500">
                     <div>
                       <h4 className="font-bold text-gray-900 mb-1">Banking Details</h4>
-                      <p>Bank: {COMPANY_DETAILS.bankName}</p>
-                      <p>Account Name: {COMPANY_DETAILS.name}</p>
-                      <p>Account Number: {COMPANY_DETAILS.accountNumber}</p>
-                      <p>Branch Code: {COMPANY_DETAILS.branchCode}</p>
+                      <p>Bank: {workshopProfile?.banking.bankName ?? ''}</p>
+                      <p>Account Name: {workshopProfile?.banking.accountName ?? workshopProfile?.name ?? ''}</p>
+                      <p>Account Number: {workshopProfile?.banking.accountNumber ?? ''}</p>
+                      <p>Branch Code: {workshopProfile?.banking.branchCode ?? ''}</p>
                       <p className="mt-2 text-blue-600">Please use Invoice #{viewingDoc.number} as reference.</p>
                     </div>
                     <div className="text-right">
                       <h4 className="font-bold text-gray-900 mb-1">Terms & Conditions</h4>
                       <p>Payment is due within 7 days of invoice date.</p>
-                      <p>Goods remain the property of {COMPANY_DETAILS.name} until paid in full.</p>
+                      <p>Goods remain the property of {workshopProfile?.name ?? 'the workshop'} until paid in full.</p>
                       <p className="mt-4 font-bold text-lg text-gray-300">THANK YOU FOR YOUR BUSINESS</p>
                     </div>
                   </div>

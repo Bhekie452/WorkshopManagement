@@ -138,5 +138,6 @@ export const Collections = {
     INVOICES: 'invoices',
     APPOINTMENTS: 'appointments',
     DIAGNOSTICS: 'diagnostics',
-    WARRANTIES: 'warranties'
+    WARRANTIES: 'warranties',
+    COMPANY_PROFILES: 'companyProfiles'
 } as const;

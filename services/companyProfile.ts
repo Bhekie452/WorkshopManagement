@@ -1,54 +1,9 @@
-/**
- * Company Profile Service
- * Manages workshop company information for invoices, emails, and documents
- */
+import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { db, auth } from './firebase';
+import { CompanyProfile } from '../types';
+import { Collections } from './firestore';
 
-export interface CompanyProfile {
-  id: string;
-  name: string;
-  tagline?: string;
-  registrationNumber?: string;
-  vatNumber?: string;
-  address: {
-    street: string;
-    city: string;
-    province: string;
-    postalCode: string;
-    country: string;
-  };
-  contact: {
-    phone: string;
-    alternativePhone?: string;
-    email: string;
-    website?: string;
-  };
-  banking: {
-    bankName: string;
-    accountName: string;
-    accountNumber: string;
-    branchCode: string;
-    accountType: string;
-  };
-  operatingHours: {
-    monday: { open: string; close: string; closed: boolean };
-    tuesday: { open: string; close: string; closed: boolean };
-    wednesday: { open: string; close: string; closed: boolean };
-    thursday: { open: string; close: string; closed: boolean };
-    friday: { open: string; close: string; closed: boolean };
-    saturday: { open: string; close: string; closed: boolean };
-    sunday: { open: string; close: string; closed: boolean };
-  };
-  logo?: string;
-  defaultTaxRate: number;
-  defaultPaymentTerms: number; // days
-  invoicePrefix: string;
-  quotePrefix: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-const DEFAULT_PROFILE: Omit<CompanyProfile, 'createdAt' | 'updatedAt'> & { createdAt?: string; updatedAt?: string } = {
-  id: 'default',
+const DEFAULT_PROFILE: Omit<CompanyProfile, 'createdAt' | 'updatedAt' | 'id'> = {
   name: 'My Workshop',
   tagline: 'Professional Auto Services',
   address: {
@@ -84,125 +39,99 @@ const DEFAULT_PROFILE: Omit<CompanyProfile, 'createdAt' | 'updatedAt'> & { creat
   quotePrefix: 'QT',
 };
 
-const STORAGE_KEY = 'companyProfile';
-
 class CompanyProfileService {
-  /**
-   * Get company profile from localStorage
-   */
-  getProfile(): CompanyProfile {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        return JSON.parse(stored);
-      } catch {
-        return this.getDefaultProfile();
-      }
+  private getUid(explicitUid?: string): string {
+    if (explicitUid) return explicitUid;
+    const user = auth.currentUser;
+    if (!user || !user.uid) {
+      throw new Error("User not authenticated. Cannot perform profile operations.");
     }
-    return this.getDefaultProfile();
+    return user.uid;
   }
 
-  private getDefaultProfile(): CompanyProfile {
+  private getDefaultProfile(uid: string): CompanyProfile {
+    const now = new Date().toISOString();
     return {
+      id: uid,
       ...DEFAULT_PROFILE,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
   }
 
-  /**
-   * Save company profile to localStorage
-   */
-  saveProfile(profile: Partial<CompanyProfile>): CompanyProfile {
-    const current = this.getProfile();
-    const updated: CompanyProfile = {
-      ...current,
+  async getProfile(explicitUid?: string): Promise<CompanyProfile> {
+    const uid = this.getUid(explicitUid);
+    const docRef = doc(db, Collections.COMPANY_PROFILES, uid);
+    
+    try {
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        return docSnap.data() as CompanyProfile;
+      } else {
+        // If no profile exists, create a default one
+        const defaultProfile = this.getDefaultProfile(uid);
+        await this.saveProfile(defaultProfile, uid);
+        return defaultProfile;
+      }
+    } catch (error) {
+      console.error("Error fetching company profile: ", error);
+      // Fallback to default in case of error
+      return this.getDefaultProfile(uid);
+    }
+  }
+
+  async saveProfile(profile: Partial<CompanyProfile>, explicitUid?: string): Promise<CompanyProfile> {
+    const uid = this.getUid(explicitUid);
+    const docRef = doc(db, Collections.COMPANY_PROFILES, uid);
+    
+    const currentProfile = await this.getProfile(uid).catch(() => this.getDefaultProfile(uid));
+
+    const updatedProfile: CompanyProfile = {
+      ...currentProfile,
       ...profile,
+      id: uid,
       updatedAt: new Date().toISOString(),
     };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
-    return updated;
+
+    await setDoc(docRef, updatedProfile, { merge: true });
+    return updatedProfile;
   }
 
-  /**
-   * Reset to default profile
-   */
-  resetProfile(): CompanyProfile {
-    const defaultWithDate = {
-      ...DEFAULT_PROFILE,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(defaultWithDate));
-    return defaultWithDate;
+  async resetProfile(explicitUid?: string): Promise<CompanyProfile> {
+    const uid = this.getUid(explicitUid);
+    const docRef = doc(db, Collections.COMPANY_PROFILES, uid);
+    const defaultProfile = this.getDefaultProfile(uid);
+
+    // Overwrite with the default profile
+    await setDoc(docRef, defaultProfile);
+    return defaultProfile;
   }
 
-  /**
-   * Get formatted address
-   */
-  getFormattedAddress(): string {
-    const profile = this.getProfile();
+  async getFormattedAddress(): Promise<string> {
+    const profile = await this.getProfile();
     const { address } = profile;
     return `${address.street}, ${address.city}, ${address.province} ${address.postalCode}, ${address.country}`;
   }
 
-  /**
-   * Get formatted contact info
-   */
-  getFormattedContact(): string {
-    const profile = this.getProfile();
-    const { contact } = profile;
-    let info = `Tel: ${contact.phone}`;
-    if (contact.alternativePhone) {
-      info += ` / ${contact.alternativePhone}`;
-    }
-    info += `\nEmail: ${contact.email}`;
-    if (contact.website) {
-      info += `\nWeb: ${contact.website}`;
-    }
-    return info;
-  }
-
-  /**
-   * Get formatted banking details
-   */
-  getFormattedBanking(): string {
-    const profile = this.getProfile();
-    const { banking } = profile;
-    return `${banking.bankName}\nAccount: ${banking.accountName}\nAcc#: ${banking.accountNumber}\nBranch: ${banking.branchCode} (${banking.accountType})`;
-  }
-
-  /**
-   * Get next invoice number
-   */
-  getNextInvoiceNumber(lastNumber: number = 0): string {
-    const profile = this.getProfile();
+  async getNextInvoiceNumber(lastNumber: number = 0): Promise<string> {
+    const profile = await this.getProfile();
     const year = new Date().getFullYear();
     const num = String(lastNumber + 1).padStart(4, '0');
     return `${profile.invoicePrefix}-${year}-${num}`;
   }
 
-  /**
-   * Get next quote number
-   */
-  getNextQuoteNumber(lastNumber: number = 0): string {
-    const profile = this.getProfile();
+  async getNextQuoteNumber(lastNumber: number = 0): Promise<string> {
+    const profile = await this.getProfile();
     const year = new Date().getFullYear();
     const num = String(lastNumber + 1).padStart(4, '0');
     return `${profile.quotePrefix}-${year}-${num}`;
   }
 
-  /**
-   * Check if profile is configured (has real data)
-   */
-  isConfigured(): boolean {
-    const profile = this.getProfile();
+  async isConfigured(): Promise<boolean> {
+    const profile = await this.getProfile();
     return profile.name !== 'My Workshop' || profile.contact.email !== 'info@workshop.co.za';
   }
 
-  /**
-   * Format currency (ZAR)
-   */
   formatCurrency(amount: number): string {
     return new Intl.NumberFormat('en-ZA', {
       style: 'currency',
@@ -210,19 +139,14 @@ class CompanyProfileService {
     }).format(amount);
   }
 
-  /**
-   * Calculate tax amount
-   */
-  calculateTax(subtotal: number): number {
-    const profile = this.getProfile();
+  async calculateTax(subtotal: number): Promise<number> {
+    const profile = await this.getProfile();
     return subtotal * (profile.defaultTaxRate / 100);
   }
 
-  /**
-   * Get tax rate
-   */
-  getTaxRate(): number {
-    return this.getProfile().defaultTaxRate;
+  async getTaxRate(): Promise<number> {
+    const profile = await this.getProfile();
+    return profile.defaultTaxRate;
   }
 }
 

@@ -5,6 +5,8 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { store } from './services/store';
 import { seedFirestore } from './services/seeder';
 import { AuthService } from './services/auth';
+import { companyProfile as companyProfileService } from './services/companyProfile';
+import { emailService } from './services/emailService';
 import { User } from './types';
 
 // Lazy Load Pages
@@ -18,6 +20,7 @@ const EVFleet = React.lazy(() => import('./pages/EVFleet').then(module => ({ def
 const Analytics = React.lazy(() => import('./pages/Analytics').then(module => ({ default: module.Analytics })));
 const Schedule = React.lazy(() => import('./pages/Schedule').then(module => ({ default: module.Schedule })));
 const Sales = React.lazy(() => import('./pages/Invoices').then(module => ({ default: module.Sales })));
+const Settings = React.lazy(() => import('./pages/Settings').then(module => ({ default: module.Settings })));
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center h-full min-h-[400px]">
@@ -137,62 +140,6 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
   );
 };
 
-const Settings = () => (
-  <div className="space-y-6">
-    <h1 className="text-2xl font-bold text-gray-900">System Settings</h1>
-
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <div className="bg-white p-6 rounded-lg shadow-sm border">
-        <h3 className="font-bold mb-4 text-lg border-b pb-2">Workshop Profile</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Workshop Name</label>
-            <input type="text" className="mt-1 block w-full border border-gray-300 rounded-md p-2" defaultValue="AutoFlow Workshop" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Address</label>
-            <textarea className="mt-1 block w-full border border-gray-300 rounded-md p-2" defaultValue="123 Mechanic Lane, Tech City" />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">VAT Number</label>
-            <input type="text" className="mt-1 block w-full border border-gray-300 rounded-md p-2" defaultValue="VAT-99887766" />
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white p-6 rounded-lg shadow-sm border">
-        <h3 className="font-bold mb-4 text-lg border-b pb-2">Data Management</h3>
-        <p className="text-gray-500 mb-4 text-sm">Manage your application data.</p>
-        <div className="space-y-3">
-          <button
-            onClick={async () => {
-              if (confirm('This will populate the database with sample data. Continue?')) {
-                try {
-                  await seedFirestore();
-                  alert('Database seeded successfully!');
-                  window.location.reload();
-                } catch (e) {
-                  alert('Error seeding database: ' + e);
-                }
-              }
-            }}
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded w-full font-medium"
-          >
-            Seed Database (Sample Data)
-          </button>
-
-          <button
-            onClick={() => { if (confirm('Are you sure? This will reset local storage.')) { store.reset(); window.location.reload(); } }}
-            className="px-4 py-2 border border-red-500 text-red-600 rounded hover:bg-red-50 w-full"
-          >
-            Reset Local Application Data
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-)
-
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
 
@@ -200,6 +147,19 @@ const App: React.FC = () => {
   useEffect(() => {
     const unsubscribe = AuthService.onAuthStateChange((user) => {
       setUser(user);
+      // When user logs in, load company profile and prime the email service
+      if (user) {
+        companyProfileService.getProfile()
+          .then(profile => {
+            emailService.setCompanyInfo({
+              name: profile.name,
+              email: profile.contact.email,
+              phone: profile.contact.phone,
+              address: `${profile.address.street}, ${profile.address.city}`,
+            });
+          })
+          .catch(() => {/* non-critical, use defaults */});
+      }
     });
     return () => unsubscribe();
   }, []);

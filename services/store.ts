@@ -242,11 +242,28 @@ export const store = {
     return newItem;
   },
   
-  updateJob: (id: string, data: Partial<Job>) => {
+  updateJob: (idOrJob: string | Job, data?: Partial<Job>) => {
     const list = get<Job[]>('jobs', MOCK_JOBS);
+    
+    // Handle both old signature (full job object) and new signature (id, partial data)
+    let id: string;
+    let updateData: Partial<Job>;
+    
+    if (typeof idOrJob === 'string') {
+      // New signature: updateJob(id, { field: value })
+      id = idOrJob;
+      updateData = data || {};
+    } else {
+      // Old signature: updateJob(fullJobObject)
+      // Preserve the id and use the full object as update data
+      id = idOrJob.id;
+      // If explicit data was provided as second arg, merge it; otherwise use the job object
+      updateData = data ? { ...idOrJob, ...data } : idOrJob;
+    }
+    
     const index = list.findIndex(j => j.id === id);
     if (index > -1) {
-      list[index] = { ...list[index], ...data };
+      list[index] = { ...list[index], ...updateData };
       set('jobs', list);
     }
   },

@@ -25,14 +25,50 @@ export interface EmailResult {
   error?: string;
 }
 
+interface CompanyInfo {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+}
+
 class EmailService {
   private serverUrl: string;
   private isConfigured: boolean = false;
+  private company: CompanyInfo = {
+    name: 'My Workshop',
+    email: 'info@workshop.co.za',
+    phone: '011 555 0000',
+    address: '',
+  };
 
   constructor() {
     // Get email server URL from environment
     this.serverUrl = import.meta.env.VITE_EMAIL_SERVER_URL || 'http://localhost:3001';
     this.isConfigured = !!this.serverUrl;
+  }
+
+  /**
+   * Update company info used in email headers and signatures.
+   * Call this once after loading the CompanyProfile from Firestore.
+   */
+  setCompanyInfo(info: Partial<CompanyInfo>): void {
+    this.company = { ...this.company, ...info };
+  }
+
+  private getEmailHeader(): string {
+    return `<h2 style="color: #2563eb;">${this.company.name}</h2>`;
+  }
+
+  private getEmailSignature(): string {
+    const lines = [
+      `Best regards,`,
+      `<strong>${this.company.name}</strong>`,
+      this.company.phone ? `Tel: ${this.company.phone}` : '',
+      this.company.email ? `Email: <a href="mailto:${this.company.email}">${this.company.email}</a>` : '',
+      this.company.address ? this.company.address : '',
+    ].filter(Boolean).join('<br>');
+    return `<p style="margin-top: 24px; border-top: 1px solid #e5e7eb; padding-top: 16px; color: #6b7280; font-size: 0.875rem;">${lines}</p>`;
   }
 
   /**
@@ -97,7 +133,7 @@ class EmailService {
       subject: `Job Update - ${jobId} - ${vehicleInfo}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #2563eb;">Workshop Management System</h2>
+          ${this.getEmailHeader()}
           <p>Dear ${customerName},</p>
           <p>${statusMessages[status] || 'There has been an update to your job.'}</p>
           
@@ -109,10 +145,7 @@ class EmailService {
           
           <p>You can log in to your customer portal to view more details about your job.</p>
           
-          <p style="margin-top: 24px;">
-            Best regards,<br>
-            Your Workshop Team
-          </p>
+          ${this.getEmailSignature()}
         </div>
       `,
     });
@@ -136,7 +169,7 @@ class EmailService {
       subject: `${docType} #${invoiceNumber} - ${isQuote ? 'Request for Approval' : 'Payment Required'}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #2563eb;">Workshop Management System</h2>
+          ${this.getEmailHeader()}
           <p>Dear ${customerName},</p>
           <p>Please find attached your ${docType.toLowerCase()} for services rendered.</p>
           
@@ -152,10 +185,7 @@ class EmailService {
           <p>To approve this quote, please log in to your customer portal or contact us.</p>
           `}
           
-          <p style="margin-top: 24px;">
-            Best regards,<br>
-            Your Workshop Team
-          </p>
+          ${this.getEmailSignature()}
         </div>
       `,
     });
@@ -176,7 +206,7 @@ class EmailService {
       subject: `Appointment Reminder - ${serviceType}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #2563eb;">Workshop Management System</h2>
+          ${this.getEmailHeader()}
           <p>Dear ${customerName},</p>
           <p>This is a friendly reminder about your upcoming appointment.</p>
           
@@ -189,10 +219,7 @@ class EmailService {
           <p>Please ensure your vehicle is available at the scheduled time.</p>
           <p>If you need to reschedule, please contact us at least 24 hours in advance.</p>
           
-          <p style="margin-top: 24px;">
-            Best regards,<br>
-            Your Workshop Team
-          </p>
+          ${this.getEmailSignature()}
         </div>
       `,
     });
@@ -213,7 +240,7 @@ class EmailService {
       subject: `Payment Confirmed - Invoice #${invoiceNumber}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #2563eb;">Workshop Management System</h2>
+          ${this.getEmailHeader()}
           <p>Dear ${customerName},</p>
           <p>Thank you for your payment. Here are your payment details:</p>
           
@@ -226,10 +253,7 @@ class EmailService {
           
           <p>Your vehicle is being prepared for collection. We will contact you once it is ready.</p>
           
-          <p style="margin-top: 24px;">
-            Best regards,<br>
-            Your Workshop Team
-          </p>
+          ${this.getEmailSignature()}
         </div>
       `,
     });
@@ -247,9 +271,9 @@ class EmailService {
       subject: 'Welcome to Our Workshop Management System',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #2563eb;">Welcome to Our Workshop!</h2>
+          <h2 style="color: #2563eb;">Welcome to ${this.company.name}!</h2>
           <p>Dear ${customerName},</p>
-          <p>Thank you for registering with our workshop management system. You can now:</p>
+          <p>Thank you for registering with us. You can now:</p>
           
           <ul>
             <li>Track your vehicle's service history</li>
@@ -260,10 +284,7 @@ class EmailService {
           
           <p>If you have any questions, please don't hesitate to contact us.</p>
           
-          <p style="margin-top: 24px;">
-            Best regards,<br>
-            Your Workshop Team
-          </p>
+          ${this.getEmailSignature()}
         </div>
       `,
     });
