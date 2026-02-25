@@ -63,6 +63,8 @@ export interface Vehicle {
   mileageHistory: MileageRecord[];
 }
 
+export type ContactChannel = 'email' | 'phone' | 'both';
+
 export interface Customer {
   id: string;
   name: string;
@@ -71,6 +73,7 @@ export interface Customer {
   address: string;
   notes?: string;
   consent: boolean; // POPIA/GDPR
+  preferredContact?: ContactChannel; // How customer prefers to be reached
   type?: 'Private' | 'Fleet' | 'Government';
   department?: string; // For government/fleet
   attachments?: Attachment[];

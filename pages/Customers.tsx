@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2 } from 'lucide-react';
-import { Customer, Attachment } from '../types';
+import { Customer, Attachment, ContactChannel } from '../types';
 
 export const Customers: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -9,7 +9,7 @@ export const Customers: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
 
   // Using a combined state for new/edit customer
-  const [formData, setFormData] = useState<Partial<Customer>>({ consent: true, attachments: [] });
+  const [formData, setFormData] = useState<Partial<Customer>>({ consent: true, preferredContact: 'both', attachments: [] });
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const loadData = async () => {
@@ -120,6 +120,7 @@ export const Customers: React.FC = () => {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preferred Contact</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">POPIA Consent</th>
             </tr>
           </thead>
@@ -153,6 +154,23 @@ export const Customers: React.FC = () => {
                   </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
+                  <div className="flex items-center gap-1.5">
+                    {(!c.preferredContact || c.preferredContact === 'email' || c.preferredContact === 'both') && (
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-700" title="Email">
+                        <Mail size={12} className="mr-1 mt-0.5" /> Email
+                      </span>
+                    )}
+                    {(c.preferredContact === 'phone' || c.preferredContact === 'both') && (
+                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-purple-100 text-purple-700" title="Phone / SMS">
+                        <Phone size={12} className="mr-1 mt-0.5" /> Phone
+                      </span>
+                    )}
+                    {!c.preferredContact && (
+                      <span className="text-xs text-gray-400">Not set</span>
+                    )}
+                  </div>
+                </td>
+                <td className="px-6 py-4 whitespace-nowrap">
                   {c.consent ? (
                     <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
                       <ShieldCheck size={12} className="mr-1 mt-0.5" /> Consented
@@ -167,7 +185,7 @@ export const Customers: React.FC = () => {
             ))}
             {customers.length === 0 && !isLoading && (
               <tr>
-                <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
+                <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
                   No customers found. Click "Add Customer" to create one.
                 </td>
               </tr>
@@ -203,6 +221,32 @@ export const Customers: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
                 <textarea className="w-full border p-2 rounded" value={formData.address || ''} onChange={e => setFormData({ ...formData, address: e.target.value })} />
+              </div>
+
+              {/* Preferred Contact Channel */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Preferred Contact Channel</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { value: 'email' as ContactChannel, label: 'Email', icon: '✉️', desc: 'Email only' },
+                    { value: 'phone' as ContactChannel, label: 'Phone / SMS', icon: '📱', desc: 'Phone & SMS' },
+                    { value: 'both' as ContactChannel, label: 'Both', icon: '📨', desc: 'Email & Phone' },
+                  ].map(opt => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, preferredContact: opt.value })}
+                      className={`flex flex-col items-center gap-1 p-3 rounded-lg border-2 transition-all text-center ${
+                        formData.preferredContact === opt.value
+                          ? 'border-blue-500 bg-blue-50 text-blue-700'
+                          : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300'
+                      }`}
+                    >
+                      <span className="text-xl">{opt.icon}</span>
+                      <span className="text-sm font-medium">{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <label className="flex items-center gap-2 p-3 bg-gray-50 rounded border">

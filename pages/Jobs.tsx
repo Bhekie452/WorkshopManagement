@@ -907,50 +907,88 @@ export const Jobs: React.FC = () => {
               )}
 
               {/* === TAB: COMMUNICATION === */}
-              {activeTab === 'communication' && (
+              {activeTab === 'communication' && (() => {
+                  const commCustomer = customers.find(c => c.id === formData.customerId);
+                  const pref = commCustomer?.preferredContact || 'both';
+                  const prefLabel = pref === 'email' ? 'Email' : pref === 'phone' ? 'Phone / SMS' : 'Email & Phone';
+                  const wantsEmail = pref === 'email' || pref === 'both';
+                  const wantsPhone = pref === 'phone' || pref === 'both';
+
+                  // Helper: send to all preferred channels for a given template
+                  const sendPreferred = async (template: string) => {
+                      if (wantsEmail) {
+                          await sendNotification('EMAIL', template);
+                      }
+                      if (wantsPhone) {
+                          await sendNotification('SMS', template);
+                      }
+                  };
+
+                  return (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-8 h-full">
                       <div className="space-y-6">
                           <h3 className="font-bold text-gray-900 text-lg">Customer Notifications</h3>
                           <p className="text-gray-500 text-sm">Send predefined updates to the customer via their preferred channel.</p>
+
+                          {/* Preferred channel badge */}
+                          {commCustomer && (
+                              <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg">
+                                  <span className="text-sm font-medium text-indigo-700">Preferred channel:</span>
+                                  <span className="inline-flex items-center gap-1 text-sm font-semibold text-indigo-900">
+                                      {wantsEmail && <Mail size={14} />}
+                                      {wantsPhone && <Smartphone size={14} />}
+                                      {prefLabel}
+                                  </span>
+                              </div>
+                          )}
                           
                           <div className="grid grid-cols-1 gap-4">
                               <button 
-                                onClick={() => sendNotification('WHATSAPP', 'Hi {{customer}}, your vehicle check-in is complete. Job #{{id}} has started.')}
-                                className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-green-500 hover:bg-green-50 transition-all group"
+                                disabled={isSendingNotif}
+                                onClick={() => sendPreferred('Hi {{customer}}, your vehicle check-in is complete. Job #{{id}} has started.')}
+                                className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-green-500 hover:bg-green-50 transition-all group disabled:opacity-50"
                               >
                                   <div className="flex items-center gap-4">
                                       <div className="bg-green-100 p-3 rounded-full text-green-600 group-hover:bg-green-200"><MessageCircle size={24} /></div>
                                       <div className="text-left">
                                           <p className="font-bold text-gray-900">Job Started</p>
-                                          <p className="text-xs text-gray-500">Send WhatsApp Update</p>
+                                          <p className="text-xs text-gray-500">
+                                              {wantsEmail && wantsPhone ? 'Send Email & SMS' : wantsEmail ? 'Send Email' : 'Send SMS'}
+                                          </p>
                                       </div>
                                   </div>
                                   <ChevronRight className="text-gray-300 group-hover:text-green-600" />
                               </button>
 
                               <button 
-                                onClick={() => sendNotification('SMS', 'Hi {{customer}}, we are waiting for parts for Job #{{id}}. We will update you shortly.')}
-                                className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-orange-500 hover:bg-orange-50 transition-all group"
+                                disabled={isSendingNotif}
+                                onClick={() => sendPreferred('Hi {{customer}}, we are waiting for parts for Job #{{id}}. We will update you shortly.')}
+                                className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-orange-500 hover:bg-orange-50 transition-all group disabled:opacity-50"
                               >
                                   <div className="flex items-center gap-4">
                                       <div className="bg-orange-100 p-3 rounded-full text-orange-600 group-hover:bg-orange-200"><AlertTriangle size={24} /></div>
                                       <div className="text-left">
                                           <p className="font-bold text-gray-900">Awaiting Parts</p>
-                                          <p className="text-xs text-gray-500">Send SMS Alert</p>
+                                          <p className="text-xs text-gray-500">
+                                              {wantsEmail && wantsPhone ? 'Send Email & SMS' : wantsEmail ? 'Send Email' : 'Send SMS'}
+                                          </p>
                                       </div>
                                   </div>
                                   <ChevronRight className="text-gray-300 group-hover:text-orange-600" />
                               </button>
 
                               <button 
-                                onClick={() => sendNotification('EMAIL', 'Hi {{customer}}, Job #{{id}} is complete! Your vehicle is ready for collection. Total: R' + formData.estimatedCost)}
-                                className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
+                                disabled={isSendingNotif}
+                                onClick={() => sendPreferred('Hi {{customer}}, Job #{{id}} is complete! Your vehicle is ready for collection. Total: R' + formData.estimatedCost)}
+                                className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group disabled:opacity-50"
                               >
                                   <div className="flex items-center gap-4">
                                       <div className="bg-blue-100 p-3 rounded-full text-blue-600 group-hover:bg-blue-200"><CheckCircle2 size={24} /></div>
                                       <div className="text-left">
                                           <p className="font-bold text-gray-900">Ready for Collection</p>
-                                          <p className="text-xs text-gray-500">Send Email Invoice</p>
+                                          <p className="text-xs text-gray-500">
+                                              {wantsEmail && wantsPhone ? 'Send Email & SMS' : wantsEmail ? 'Send Email' : 'Send SMS'}
+                                          </p>
                                       </div>
                                   </div>
                                   <ChevronRight className="text-gray-300 group-hover:text-blue-600" />
@@ -978,7 +1016,8 @@ export const Jobs: React.FC = () => {
                           </div>
                       </div>
                   </div>
-              )}
+                  );
+              })()}
 
               {/* === TAB: HISTORY (LOGS) === */}
               {activeTab === 'history' && (
