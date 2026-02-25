@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { 
   Calendar as CalendarIcon, Clock, Plus, ChevronLeft, ChevronRight, 
-  User, MapPin, Repeat, AlignJustify, Grid3X3, Columns, LayoutList, X, Check
+  User, MapPin, Repeat, AlignJustify, Grid3X3, Columns, LayoutList, X, Check, Trash2
 } from 'lucide-react';
 import { Appointment, Customer, Vehicle } from '../types';
 
@@ -19,6 +19,7 @@ export const Schedule: React.FC = () => {
   
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState<Partial<Appointment>>({
     type: 'Service',
     status: 'Scheduled',
@@ -87,6 +88,7 @@ export const Schedule: React.FC = () => {
     const end = new Date(start);
     end.setHours(10, 0, 0, 0);
     
+    setEditingId(null);
     setFormData({
       type: 'Service',
       status: 'Scheduled',
@@ -97,12 +99,32 @@ export const Schedule: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const handleEditAppointment = (apt: Appointment) => {
+    setEditingId(apt.id);
+    setFormData({ ...apt });
+    setIsModalOpen(true);
+  };
+
+  const handleDeleteAppointment = (id: string) => {
+    if (confirm('Delete this appointment? This cannot be undone.')) {
+      store.deleteAppointment(id);
+      setIsModalOpen(false);
+      setEditingId(null);
+      refreshData();
+    }
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title || !formData.customerId) return;
     
-    store.addAppointment(formData as Appointment);
+    if (editingId) {
+      store.updateAppointment(editingId, formData);
+    } else {
+      store.addAppointment(formData as Appointment);
+    }
     setIsModalOpen(false);
+    setEditingId(null);
     refreshData();
   };
 
@@ -133,7 +155,7 @@ export const Schedule: React.FC = () => {
           </div>
           <div className="space-y-1">
             {dayAppts.map(apt => (
-              <div key={apt.id} className={`text-xs px-2 py-1 rounded truncate border ${getTypeStyle(apt.type)}`}>
+              <div key={apt.id} onClick={(e) => { e.stopPropagation(); handleEditAppointment(apt); }} className={`text-xs px-2 py-1 rounded truncate border cursor-pointer hover:opacity-80 ${getTypeStyle(apt.type)}`}>
                  <div className="flex items-center gap-1">
                     {apt.recurrence !== 'None' && <Repeat size={8} />}
                     <span className="font-semibold">{new Date(apt.start).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
@@ -225,6 +247,7 @@ export const Schedule: React.FC = () => {
                         return (
                             <div 
                                 key={apt.id}
+                                onClick={() => handleEditAppointment(apt)}
                                 className={`absolute rounded px-2 py-1 text-xs border overflow-hidden shadow-sm hover:shadow-md transition-shadow cursor-pointer ${getTypeStyle(apt.type)}`}
                                 style={{
                                     top: `${top}px`,
@@ -283,7 +306,7 @@ export const Schedule: React.FC = () => {
                                     </div>
                                 </div>
                                 <div className="text-right">
-                                     <button className="text-sm text-blue-600 font-medium hover:underline">View Details</button>
+                                     <button onClick={() => handleEditAppointment(apt)} className="text-sm text-blue-600 font-medium hover:underline">View Details</button>
                                 </div>
                             </div>
                         )
@@ -353,8 +376,20 @@ export const Schedule: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
             <div className="bg-white rounded-xl w-full max-w-lg shadow-2xl overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-                    <h3 className="text-lg font-bold text-gray-900">New Appointment</h3>
-                    <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
+                    <h3 className="text-lg font-bold text-gray-900">{editingId ? 'Edit Appointment' : 'New Appointment'}</h3>
+                    <div className="flex items-center gap-2">
+                        {editingId && (
+                            <button
+                                type="button"
+                                onClick={() => handleDeleteAppointment(editingId)}
+                                className="text-red-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                                title="Delete Appointment"
+                            >
+                                <Trash2 size={18} />
+                            </button>
+                        )}
+                        <button onClick={() => { setIsModalOpen(false); setEditingId(null); }} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
+                    </div>
                 </div>
                 
                 <form onSubmit={handleSave} className="p-6 space-y-4">
@@ -464,9 +499,9 @@ export const Schedule: React.FC = () => {
                     </div>
 
                     <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
-                        <button type="button" onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg">Cancel</button>
+                        <button type="button" onClick={() => { setIsModalOpen(false); setEditingId(null); }} className="px-4 py-2 text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg">Cancel</button>
                         <button type="submit" className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold flex items-center gap-2">
-                            <Check size={18} /> Schedule
+                            <Check size={18} /> {editingId ? 'Update' : 'Schedule'}
                         </button>
                     </div>
                 </form>

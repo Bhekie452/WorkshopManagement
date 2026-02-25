@@ -510,12 +510,27 @@ export const Jobs: React.FC = () => {
               </div>
               <div className="flex items-center gap-3">
                   {selectedJob && (
+                    <>
+                      <button 
+                        onClick={() => {
+                          if (confirm(`Delete job "${selectedJob.id}"? This cannot be undone.`)) {
+                            store.deleteJob(selectedJob.id);
+                            setIsModalOpen(false);
+                            refreshData();
+                          }
+                        }}
+                        className="text-red-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                        title="Delete Job"
+                      >
+                          <Trash2 size={18} />
+                      </button>
                       <button 
                         onClick={() => handleSave()} 
                         className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"
                       >
                           <Send size={16} /> Save Changes
                       </button>
+                    </>
                   )}
                   <button onClick={() => setIsModalOpen(false)} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-full transition-colors">
                     <X size={24} />

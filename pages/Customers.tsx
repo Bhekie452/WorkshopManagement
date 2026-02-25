@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
-import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2 } from 'lucide-react';
+import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2, Trash2 } from 'lucide-react';
 import { Customer, Attachment, ContactChannel } from '../types';
 
 export const Customers: React.FC = () => {
@@ -11,6 +11,7 @@ export const Customers: React.FC = () => {
   // Using a combined state for new/edit customer
   const [formData, setFormData] = useState<Partial<Customer>>({ consent: true, preferredContact: 'both', attachments: [] });
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const loadData = async () => {
     setIsLoading(true);
@@ -90,6 +91,26 @@ export const Customers: React.FC = () => {
     }
   };
 
+  const handleDelete = async (id: string, name: string) => {
+    if (confirm(`Delete customer "${name}"? This cannot be undone.`)) {
+      setIsLoading(true);
+      try {
+        await store.deleteCustomer(id);
+        await loadData();
+      } catch (error) {
+        console.error('Failed to delete customer', error);
+        alert('Failed to delete customer.');
+        setIsLoading(false);
+      }
+    }
+  };
+
+  const filteredCustomers = customers.filter(c =>
+    c.name.toLowerCase().includes(search.toLowerCase()) ||
+    c.email.toLowerCase().includes(search.toLowerCase()) ||
+    c.phone.includes(search)
+  );
+
   if (isLoading && customers.length === 0) {
     return (
       <div className="flex items-center justify-center h-full min-h-[400px]">
@@ -113,6 +134,18 @@ export const Customers: React.FC = () => {
         </button>
       </div>
 
+      {/* Search */}
+      <div className="relative max-w-md">
+        <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
+        <input
+          type="text"
+          placeholder="Search by name, email, or phone..."
+          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+      </div>
+
       <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
@@ -122,10 +155,11 @@ export const Customers: React.FC = () => {
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Preferred Contact</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">POPIA Consent</th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {customers.map((c) => (
+            {filteredCustomers.map((c) => (
               <tr key={c.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => handleEdit(c)}>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center">
@@ -181,12 +215,21 @@ export const Customers: React.FC = () => {
                     </span>
                   )}
                 </td>
+                <td className="px-6 py-4 whitespace-nowrap text-right">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDelete(c.id, c.name); }}
+                    className="text-gray-300 hover:text-red-500 transition-colors"
+                    title="Delete customer"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </td>
               </tr>
             ))}
-            {customers.length === 0 && !isLoading && (
+            {filteredCustomers.length === 0 && !isLoading && (
               <tr>
-                <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
-                  No customers found. Click "Add Customer" to create one.
+                <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
+                  {search ? 'No customers match your search.' : 'No customers found. Click "Add Customer" to create one.'}
                 </td>
               </tr>
             )}
@@ -221,6 +264,32 @@ export const Customers: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Address</label>
                 <textarea className="w-full border p-2 rounded" value={formData.address || ''} onChange={e => setFormData({ ...formData, address: e.target.value })} />
+              </div>
+
+              {/* Customer Type */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Customer Type</label>
+                <select
+                  className="w-full border p-2 rounded"
+                  value={formData.type || 'Private'}
+                  onChange={e => setFormData({ ...formData, type: e.target.value as Customer['type'] })}
+                >
+                  <option value="Private">Private</option>
+                  <option value="Fleet">Fleet</option>
+                  <option value="Government">Government</option>
+                </select>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+                <textarea
+                  className="w-full border p-2 rounded"
+                  rows={3}
+                  placeholder="Internal notes about this customer..."
+                  value={formData.notes || ''}
+                  onChange={e => setFormData({ ...formData, notes: e.target.value })}
+                />
               </div>
 
               {/* Preferred Contact Channel */}

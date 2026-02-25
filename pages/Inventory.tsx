@@ -161,8 +161,17 @@ export const Inventory: React.FC = () => {
                     <button onClick={() => handleEdit(part)} className="text-blue-600 hover:text-blue-900 mr-3">
                       <Edit size={18} />
                     </button>
-                    {/* Placeholder for delete */}
-                    <button className="text-red-600 hover:text-red-900 opacity-50 cursor-not-allowed">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Delete part "${part.name}"? This cannot be undone.`)) {
+                          store.deletePart(part.id);
+                          refreshData();
+                        }
+                      }}
+                      className="text-red-600 hover:text-red-900"
+                      title="Delete part"
+                    >
                       <Trash2 size={18} />
                     </button>
                   </td>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
-import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2 } from 'lucide-react';
-import { Vehicle, Customer } from '../types';
+import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2, Trash2, Edit } from 'lucide-react';
+import { Vehicle, Customer, Job } from '../types';
 
 export const Vehicles: React.FC = () => {
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -18,6 +18,11 @@ export const Vehicles: React.FC = () => {
     // Vehicle Details Modal State
     const [isDetailsOpen, setIsDetailsOpen] = useState(false);
     const [detailsVehicle, setDetailsVehicle] = useState<Vehicle | null>(null);
+    const [jobs, setJobs] = useState<Job[]>([]);
+
+    // Edit mode state
+    const [isEditing, setIsEditing] = useState(false);
+    const [editData, setEditData] = useState<Partial<Vehicle>>({});
 
     const [newVehicle, setNewVehicle] = useState<Partial<Vehicle>>({ fuelType: 'Petrol' });
 
@@ -30,6 +35,7 @@ export const Vehicles: React.FC = () => {
             ]);
             setVehicles(fetchedVehicles);
             setCustomers(fetchedCustomers);
+            try { setJobs(store.getJobs()); } catch { setJobs([]); }
         } catch (error) {
             console.error("Failed to load vehicle data", error);
         } finally {
@@ -98,7 +104,40 @@ export const Vehicles: React.FC = () => {
 
     const openDetails = (vehicle: Vehicle) => {
         setDetailsVehicle(vehicle);
+        setEditData({ ...vehicle });
+        setIsEditing(false);
         setIsDetailsOpen(true);
+    };
+
+    const handleDelete = async (v: Vehicle) => {
+        if (confirm(`Delete vehicle "${v.year} ${v.make} ${v.model} (${v.registration})"? This cannot be undone.`)) {
+            setIsLoading(true);
+            try {
+                await store.deleteVehicle(v.id);
+                setIsDetailsOpen(false);
+                await loadData();
+            } catch (error) {
+                console.error('Failed to delete vehicle', error);
+                alert('Failed to delete vehicle.');
+                setIsLoading(false);
+            }
+        }
+    };
+
+    const handleEditSave = async () => {
+        if (!detailsVehicle || !editData.registration || !editData.ownerId) return;
+        setIsLoading(true);
+        try {
+            await store.updateVehicle(detailsVehicle.id, editData);
+            setIsEditing(false);
+            await loadData();
+            setDetailsVehicle({ ...detailsVehicle, ...editData } as Vehicle);
+        } catch (error) {
+            console.error('Failed to update vehicle', error);
+            alert('Failed to update vehicle.');
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     const getFuelIcon = (type: string) => {
@@ -322,12 +361,28 @@ export const Vehicles: React.FC = () => {
                                     </p>
                                 </div>
                             </div>
-                            <button
-                                onClick={() => setIsDetailsOpen(false)}
-                                className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-100"
-                            >
-                                <X size={24} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => { setEditData({ ...detailsVehicle }); setIsEditing(!isEditing); }}
+                                    className={`p-2 rounded-lg transition-colors ${isEditing ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-blue-600 hover:bg-blue-50'}`}
+                                    title="Edit Vehicle"
+                                >
+                                    <Edit size={18} />
+                                </button>
+                                <button
+                                    onClick={() => handleDelete(detailsVehicle)}
+                                    className="text-gray-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
+                                    title="Delete Vehicle"
+                                >
+                                    <Trash2 size={18} />
+                                </button>
+                                <button
+                                    onClick={() => setIsDetailsOpen(false)}
+                                    className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-100"
+                                >
+                                    <X size={24} />
+                                </button>
+                            </div>
                         </div>
 
                         <div className="flex-1 overflow-y-auto p-6">
@@ -415,22 +470,86 @@ export const Vehicles: React.FC = () => {
                             {/* Recent Service History */}
                             <div className="mt-6 bg-gray-50 rounded-lg p-5">
                                 <h4 className="font-bold text-gray-700 mb-4">Recent Service History</h4>
-                                {/* Note: Jobs still need to be migrated to storeV2 for this to work perfectly across all entities, 
-                              this viewer currently relies on store.getJobs which is not yet async in this context 
-                              Wait - Vehicles.tsx does NOT import jobs? 
-                              Ah, the original code used store.getJobs() inside the render.
-                              We need to fetch jobs too or just show a placeholder for now until Jobs page is migrated.
-                              For now I will comment out the Jobs history part or fetch it if I can.
-                              Since Jobs aren't migrated, let's just make sure we don't break.
-                              But wait, we are migrating incrementally. 
-                              The original code did: const jobs = store.getJobs().filter...
-                              In storeV2, getJobs() is async. We can't call it in render.
-                              I will remove the service history section temporarily or fetch it in loadData.
-                              Let's fetch it in loadData for completeness, although Jobs data might still be local if not migrated.
-                              Actually, storeV2.getJobs() will try Firestore then Local.
-                           */}
-                                <p className="text-gray-400 italic">Service history will be available after Jobs migration.</p>
+                                {(() => {
+                                    const vehicleJobs = jobs.filter(j => j.vehicleId === detailsVehicle.id)
+                                        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                                        .slice(0, 10);
+                                    return vehicleJobs.length > 0 ? (
+                                        <div className="space-y-3">
+                                            {vehicleJobs.map(j => (
+                                                <div key={j.id} className="flex items-center justify-between p-3 bg-white rounded border border-gray-200">
+                                                    <div>
+                                                        <p className="font-medium text-gray-900">{j.serviceType}</p>
+                                                        <p className="text-sm text-gray-500">{j.description?.slice(0, 60)}</p>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                                            j.status === 'Completed' ? 'bg-green-100 text-green-800' :
+                                                            j.status === 'In Progress' ? 'bg-blue-100 text-blue-800' :
+                                                            'bg-gray-100 text-gray-800'
+                                                        }`}>{j.status}</span>
+                                                        <p className="text-xs text-gray-400 mt-1">{new Date(j.createdAt).toLocaleDateString()}</p>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <p className="text-gray-400 italic">No service jobs recorded for this vehicle.</p>
+                                    );
+                                })()}
                             </div>
+                            {/* Edit Vehicle Form */}
+                            {isEditing && (
+                                <div className="mt-6 bg-blue-50 rounded-lg p-5 border border-blue-200">
+                                    <h4 className="font-bold text-blue-700 mb-4 flex items-center gap-2">
+                                        <Edit size={18} /> Edit Vehicle Details
+                                    </h4>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Make</label>
+                                            <input type="text" className="w-full border p-2 rounded" value={editData.make || ''} onChange={e => setEditData({ ...editData, make: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                                            <input type="text" className="w-full border p-2 rounded" value={editData.model || ''} onChange={e => setEditData({ ...editData, model: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
+                                            <input type="number" className="w-full border p-2 rounded" value={editData.year || ''} onChange={e => setEditData({ ...editData, year: Number(e.target.value) })} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                                            <input type="text" className="w-full border p-2 rounded" value={editData.color || ''} onChange={e => setEditData({ ...editData, color: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Registration</label>
+                                            <input type="text" className="w-full border p-2 rounded" value={editData.registration || ''} onChange={e => setEditData({ ...editData, registration: e.target.value })} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Fuel Type</label>
+                                            <select className="w-full border p-2 rounded" value={editData.fuelType || 'Petrol'} onChange={e => setEditData({ ...editData, fuelType: e.target.value })}>
+                                                <option value="Petrol">Petrol</option>
+                                                <option value="Diesel">Diesel</option>
+                                                <option value="Hybrid">Hybrid</option>
+                                                <option value="Electric">Electric</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">Owner</label>
+                                            <select className="w-full border p-2 rounded" value={editData.ownerId || ''} onChange={e => setEditData({ ...editData, ownerId: e.target.value })}>
+                                                <option value="">Select Owner</option>
+                                                {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-end gap-2 mt-4">
+                                        <button onClick={() => setIsEditing(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
+                                        <button onClick={handleEditSave} disabled={isLoading} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">
+                                            {isLoading ? 'Saving...' : 'Save Changes'}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         <div className="p-6 border-t border-gray-100 bg-gray-50">

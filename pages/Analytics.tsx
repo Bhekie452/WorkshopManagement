@@ -1,22 +1,38 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { store } from '../services/store';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { DollarSign, TrendingUp, Users, CalendarCheck } from 'lucide-react';
 import { JobStatus } from '../types';
 
+type DateRange = '6m' | 'ytd' | '12m';
+
 export const Analytics: React.FC = () => {
   const jobs = store.getJobs();
   const customers = store.getCustomers();
+  const invoices = store.getInvoices();
+  const [dateRange, setDateRange] = useState<DateRange>('6m');
 
-  // Mock Revenue Data (Last 6 Months)
-  const revenueData = [
-    { name: 'Jan', revenue: 4000 },
-    { name: 'Feb', revenue: 3000 },
-    { name: 'Mar', revenue: 2000 },
-    { name: 'Apr', revenue: 2780 },
-    { name: 'May', revenue: 1890 },
-    { name: 'Jun', revenue: 2390 },
-  ];
+  // --- Build real revenue data from completed jobs & paid invoices ---
+  const now = new Date();
+  const rangeMonths = dateRange === '6m' ? 6 : dateRange === 'ytd' ? now.getMonth() + 1 : 12;
+
+  const revenueData = Array.from({ length: rangeMonths }, (_, i) => {
+    const month = new Date(now.getFullYear(), now.getMonth() - (rangeMonths - 1 - i), 1);
+    const monthEnd = new Date(month.getFullYear(), month.getMonth() + 1, 0, 23, 59, 59);
+    const label = month.toLocaleString('default', { month: 'short' });
+
+    // Sum from completed jobs in this month
+    const jobRev = jobs
+      .filter(j => j.status === JobStatus.COMPLETED && new Date(j.createdAt) >= month && new Date(j.createdAt) <= monthEnd)
+      .reduce((sum, j) => sum + (j.estimatedCost || 0), 0);
+
+    // Sum from paid invoices in this month
+    const invRev = invoices
+      .filter(inv => inv.status === 'Paid' && new Date(inv.date) >= month && new Date(inv.date) <= monthEnd)
+      .reduce((sum, inv) => sum + (inv.total || 0), 0);
+
+    return { name: label, revenue: Math.max(jobRev, invRev) };
+  });
 
   // Job Status Distribution for Pie Chart
   const statusCounts = jobs.reduce((acc, job) => {
@@ -39,8 +55,9 @@ export const Analytics: React.FC = () => {
        <div className="flex justify-between items-center">
          <h1 className="text-2xl font-bold text-gray-900">Analytics Dashboard</h1>
          <div className="bg-white border rounded-lg p-1 flex text-sm">
-             <button className="px-3 py-1 bg-gray-100 font-medium rounded">Last 6 Months</button>
-             <button className="px-3 py-1 text-gray-500 hover:bg-gray-50 rounded">Year to Date</button>
+             <button onClick={() => setDateRange('6m')} className={`px-3 py-1 rounded ${dateRange === '6m' ? 'bg-gray-100 font-medium' : 'text-gray-500 hover:bg-gray-50'}`}>Last 6 Months</button>
+             <button onClick={() => setDateRange('ytd')} className={`px-3 py-1 rounded ${dateRange === 'ytd' ? 'bg-gray-100 font-medium' : 'text-gray-500 hover:bg-gray-50'}`}>Year to Date</button>
+             <button onClick={() => setDateRange('12m')} className={`px-3 py-1 rounded ${dateRange === '12m' ? 'bg-gray-100 font-medium' : 'text-gray-500 hover:bg-gray-50'}`}>Last 12 Months</button>
          </div>
        </div>
 

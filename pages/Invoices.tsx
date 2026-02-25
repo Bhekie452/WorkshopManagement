@@ -1,7 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { store } from '../services/store'; // Changed to storeV2
 import { PDFService } from '../services/pdf';
-import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2 } from 'lucide-react';
+import { emailService } from '../services/emailService';
+import { payfastService } from '../services/payfastService';
+import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail } from 'lucide-react';
 import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer, CompanyProfile } from '../types';
 import { companyProfile as companyProfileService } from '../services/companyProfile';
 
@@ -112,22 +114,52 @@ export const Sales: React.FC = () => {
     setOpenDropdown(null);
   };
 
-  const handleMarkAsSent = (doc: Invoice) => {
+  const handleMarkAsSent = async (doc: Invoice) => {
+    const customer = customers.find(c => c.id === doc.customerId);
+    if (customer?.email) {
+      try {
+        await emailService.sendInvoice(
+          customer.email,
+          customer.name,
+          doc.number,
+          doc.total,
+          new Date(doc.dueDate).toLocaleDateString()
+        );
+      } catch (err) {
+        console.error('Email send failed:', err);
+      }
+    }
     store.updateInvoice(doc.id, { status: 'Sent' });
     refreshData();
     setOpenDropdown(null);
   };
 
+  const handleSendPaymentLink = async (doc: Invoice) => {
+    const customer = customers.find(c => c.id === doc.customerId);
+    if (!customer) { alert('Customer not found'); return; }
+    if (!payfastService.isConfigured()) { alert('PayFast is not configured. Add credentials to .env.local'); return; }
+    try {
+      const baseUrl = window.location.origin;
+      const payUrl = await payfastService.createInvoicePayment(
+        doc.number, doc.total, customer.email, customer.name, baseUrl
+      );
+      window.open(payUrl, '_blank');
+    } catch (err) {
+      console.error('PayFast error:', err);
+      alert('Failed to generate payment link');
+    }
+    setOpenDropdown(null);
+  };
+
   const handleDelete = async (doc: Invoice) => {
     if (confirm(`Are you sure you want to delete ${doc.number}?`)) {
-      // NOTE: storeV2 does not currently export deleteInvoice, but relies on Firestore logic.
-      // For now, we update to a 'Deleted' status or implement delete if available.
-      // Assuming delete is not strictly implemented in storeV2 for Invoice yet based on file view, 
-      // we will just alert for now or implement if added.
-      // Checking storeV2 interface: deleteCustomer exists, deleteInvoice missing?
-      // Ah, checked storeV2.ts, deleteInvoice IS MISSING.
-      // For this task, I will mock it or just assume update to 'Rejected'/'Cancelled' is enough
-      alert("Delete not yet fully supported in V2 store. Hiding item locally.");
+      try {
+        store.deleteInvoice(doc.id);
+        refreshData();
+      } catch (error) {
+        console.error('Failed to delete invoice', error);
+        alert('Failed to delete invoice.');
+      }
       setOpenDropdown(null);
     }
   };
@@ -518,8 +550,15 @@ export const Sales: React.FC = () => {
                                   onClick={() => handleMarkAsSent(doc)}
                                   className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
                                 >
-                                  <Send size={16} />
-                                  Mark as Sent
+                                  <Mail size={16} />
+                                  Send via Email
+                                </button>
+                                <button
+                                  onClick={() => handleSendPaymentLink(doc)}
+                                  className="w-full text-left px-4 py-2 text-sm text-teal-600 hover:bg-teal-50 flex items-center gap-3"
+                                >
+                                  <CreditCard size={16} />
+                                  PayFast Payment Link
                                 </button>
                                 <button
                                   onClick={() => handleMarkAsPaid(doc)}
