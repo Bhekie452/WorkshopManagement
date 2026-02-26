@@ -9,7 +9,7 @@ import {
   Plus, Filter, Search, Calendar, ChevronRight, X, BrainCircuit, Users, 
   Settings, PenTool, ClipboardList, MessageCircle, Mail, Smartphone,
   Clock, Package, AlertTriangle, CheckCircle2, History, Send, Gauge,
-  Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid
+  Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid, SlidersHorizontal
 } from 'lucide-react';
 
 // Track Gemini API quota cooldown (skip API calls for 60s after a 429)
@@ -69,6 +69,7 @@ export const Jobs: React.FC = () => {
 
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<JobStatus | 'ALL'>('ALL');
+  const [filterPriority, setFilterPriority] = useState<Priority | 'ALL'>('ALL');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -372,11 +373,22 @@ export const Jobs: React.FC = () => {
   };
 
   const filteredJobs = jobs.filter(job => {
-    const matchesSearch = job.id.toLowerCase().includes(search.toLowerCase()) || 
-                          job.serviceType.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = !search ||
+      job.id.toLowerCase().includes(search.toLowerCase()) || 
+      job.serviceType.toLowerCase().includes(search.toLowerCase());
     const matchesFilter = filterStatus === 'ALL' || job.status === filterStatus;
-    return matchesSearch && matchesFilter;
+    const matchesPriority = filterPriority === 'ALL' || job.priority === filterPriority;
+    return matchesSearch && matchesFilter && matchesPriority;
   });
+
+  const activeFilterCount = [filterStatus !== 'ALL', filterPriority !== 'ALL', search !== ''].filter(Boolean).length;
+
+  const clearAllFilters = () => {
+    setSearch('');
+    setFilterStatus('ALL');
+    setFilterPriority('ALL');
+    setCurrentPage(1);
+  };
 
   return (
     <div className="space-y-6">
@@ -395,47 +407,99 @@ export const Jobs: React.FC = () => {
       </div>
 
       {/* Filters */}
-      <div className="bg-white rounded-xl shadow-sm p-4 flex flex-col sm:flex-row gap-4 border border-gray-100">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
-          <input 
-            type="text" 
-            placeholder="Search Job ID, vehicle, or service type..." 
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
-            value={search}
-            onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
-          />
-        </div>
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0">
-          <Filter size={20} className="text-gray-400 hidden sm:block" />
-          {['ALL', JobStatus.PENDING, JobStatus.IN_PROGRESS, JobStatus.AWAITING_PARTS, JobStatus.COMPLETED].map((status) => (
-             <button
-                key={status}
-                onClick={() => { setFilterStatus(status as any); setCurrentPage(1); }}
-                className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border ${
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+        <div className="p-4 flex flex-col gap-4">
+          {/* Row 1: Search + View Toggle */}
+          <div className="flex flex-col sm:flex-row gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+              <input 
+                type="text" 
+                placeholder="Search Job ID, vehicle, or service type..." 
+                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-300 outline-none transition-all"
+                value={search}
+                onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
+              />
+            </div>
+            <div className="flex items-center gap-1 border border-gray-200 rounded-lg p-0.5 bg-gray-50">
+              <button
+                onClick={() => setViewMode('list')}
+                className={`p-2 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
+                title="List View"
+              >
+                <LayoutList size={18} />
+              </button>
+              <button
+                onClick={() => setViewMode('grid')}
+                className={`p-2 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
+                title="Grid View"
+              >
+                <LayoutGrid size={18} />
+              </button>
+            </div>
+          </div>
+          {/* Row 2: Filter Pills */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 text-sm text-gray-500 mr-1">
+              <SlidersHorizontal size={16} />
+              <span className="hidden sm:inline font-medium">Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeFilterCount}</span>
+              )}
+            </div>
+            {/* Status Filter */}
+            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
+              {['ALL', JobStatus.PENDING, JobStatus.IN_PROGRESS, JobStatus.AWAITING_PARTS, JobStatus.COMPLETED].map((status) => (
+                <button
+                  key={status}
+                  onClick={() => { setFilterStatus(status as any); setCurrentPage(1); }}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all ${
                     filterStatus === status 
-                    ? 'bg-slate-800 text-white border-slate-800' 
-                    : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
-                }`}
-             >
-                {status === 'ALL' ? 'All Jobs' : status}
-             </button>
-          ))}
-          <div className="border-l border-gray-200 pl-2 ml-1 flex items-center gap-1">
-            <button
-              onClick={() => setViewMode('list')}
-              className={`p-1.5 rounded transition-colors ${viewMode === 'list' ? 'bg-slate-800 text-white' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-              title="List View"
-            >
-              <LayoutList size={18} />
-            </button>
-            <button
-              onClick={() => setViewMode('grid')}
-              className={`p-1.5 rounded transition-colors ${viewMode === 'grid' ? 'bg-slate-800 text-white' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-              title="Grid View"
-            >
-              <LayoutGrid size={18} />
-            </button>
+                      ? 'bg-white shadow-sm border ' + (
+                          status === JobStatus.COMPLETED ? 'text-green-700 border-green-200' :
+                          status === JobStatus.IN_PROGRESS ? 'text-blue-700 border-blue-200' :
+                          status === JobStatus.AWAITING_PARTS ? 'text-amber-700 border-amber-200' :
+                          status === JobStatus.PENDING ? 'text-gray-700 border-gray-300' :
+                          'text-blue-700 border-blue-200'
+                        )
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {status === 'ALL' ? 'All' : status}
+                </button>
+              ))}
+            </div>
+            {/* Priority Filter */}
+            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
+              {['ALL', Priority.LOW, Priority.MEDIUM, Priority.HIGH, Priority.URGENT].map((pri) => (
+                <button
+                  key={pri}
+                  onClick={() => { setFilterPriority(pri as any); setCurrentPage(1); }}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all ${
+                    filterPriority === pri
+                      ? 'bg-white shadow-sm border ' + (
+                          pri === Priority.URGENT ? 'text-red-700 border-red-200' :
+                          pri === Priority.HIGH ? 'text-orange-700 border-orange-200' :
+                          pri === Priority.MEDIUM ? 'text-yellow-700 border-yellow-200' :
+                          pri === Priority.LOW ? 'text-green-700 border-green-200' :
+                          'text-blue-700 border-blue-200'
+                        )
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {pri === 'ALL' ? 'Priority' : pri}
+                </button>
+              ))}
+            </div>
+            {/* Clear Filters */}
+            {activeFilterCount > 0 && (
+              <button
+                onClick={clearAllFilters}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              >
+                <X size={14} /> Clear
+              </button>
+            )}
           </div>
         </div>
       </div>

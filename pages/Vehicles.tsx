@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { Pagination, paginate } from '../components/Pagination';
-import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2, Trash2, Edit, LayoutList, LayoutGrid } from 'lucide-react';
+import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2, Trash2, Edit, LayoutList, LayoutGrid, SlidersHorizontal } from 'lucide-react';
 import { Vehicle, Customer, Job } from '../types';
 
 export const Vehicles: React.FC = () => {
@@ -30,6 +30,8 @@ export const Vehicles: React.FC = () => {
     const [searchQuery, setSearchQuery] = useState('');
     const [currentPage, setCurrentPage] = useState(1);
     const [pageSize, setPageSize] = useState(10);
+    const [filterFuel, setFilterFuel] = useState<string>('ALL');
+    const [filterMake, setFilterMake] = useState<string>('ALL');
 
     const loadData = async () => {
         setIsLoading(true);
@@ -165,17 +167,31 @@ export const Vehicles: React.FC = () => {
     }
 
     const filteredVehicles = vehicles.filter(v => {
-        if (!searchQuery) return true;
-        const q = searchQuery.toLowerCase();
-        const owner = customers.find(c => c.id === v.ownerId);
-        return (
-            `${v.year} ${v.make} ${v.model}`.toLowerCase().includes(q) ||
-            v.registration.toLowerCase().includes(q) ||
-            v.vin.toLowerCase().includes(q) ||
-            (owner?.name || '').toLowerCase().includes(q) ||
-            v.fuelType.toLowerCase().includes(q)
-        );
+        const matchesSearch = !searchQuery || (() => {
+            const q = searchQuery.toLowerCase();
+            const owner = customers.find(c => c.id === v.ownerId);
+            return (
+                `${v.year} ${v.make} ${v.model}`.toLowerCase().includes(q) ||
+                v.registration.toLowerCase().includes(q) ||
+                v.vin.toLowerCase().includes(q) ||
+                (owner?.name || '').toLowerCase().includes(q) ||
+                v.fuelType.toLowerCase().includes(q)
+            );
+        })();
+        const matchesFuel = filterFuel === 'ALL' || v.fuelType === filterFuel;
+        const matchesMake = filterMake === 'ALL' || v.make === filterMake;
+        return matchesSearch && matchesFuel && matchesMake;
     });
+
+    const makes = [...new Set(vehicles.map(v => v.make))].sort();
+    const activeFilterCount = [filterFuel !== 'ALL', filterMake !== 'ALL', searchQuery !== ''].filter(Boolean).length;
+
+    const clearFilters = () => {
+        setSearchQuery('');
+        setFilterFuel('ALL');
+        setFilterMake('ALL');
+        setCurrentPage(1);
+    };
 
     return (
         <div className="space-y-6">
@@ -189,35 +205,95 @@ export const Vehicles: React.FC = () => {
                 </button>
             </div>
 
-            {/* Search & View Toggle Bar */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
-                <div className="relative flex-1 w-full sm:max-w-xs">
-                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            {/* Filter Bar */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+              <div className="p-4 flex flex-col gap-4">
+                {/* Row 1: Search + View Toggle */}
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <div className="relative flex-1">
+                    <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                     <input
                         type="text"
                         placeholder="Search vehicles..."
                         value={searchQuery}
                         onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-                        className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                        className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-300 outline-none transition-all"
                     />
-                </div>
-                <div className="flex items-center gap-1 ml-auto">
-                    <div className="h-6 w-px bg-gray-200 mx-1" />
+                  </div>
+                  <div className="flex items-center gap-1 border border-gray-200 rounded-lg p-0.5 bg-gray-50">
                     <button
                         onClick={() => setViewMode('list')}
-                        className={`p-2 rounded-lg transition-colors ${viewMode === 'list' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                        className={`p-2 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
                         title="Table View"
                     >
                         <LayoutList size={18} />
                     </button>
                     <button
                         onClick={() => setViewMode('grid')}
-                        className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                        className={`p-2 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
                         title="Grid View"
                     >
                         <LayoutGrid size={18} />
                     </button>
+                  </div>
                 </div>
+                {/* Row 2: Filters */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 text-sm text-gray-500 mr-1">
+                    <SlidersHorizontal size={16} />
+                    <span className="hidden sm:inline font-medium">Filters</span>
+                    {activeFilterCount > 0 && (
+                      <span className="bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeFilterCount}</span>
+                    )}
+                  </div>
+                  {/* Fuel Type Filter */}
+                  <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
+                    {['ALL', 'Petrol', 'Diesel', 'Electric', 'Hybrid'].map(fuel => (
+                      <button
+                        key={fuel}
+                        onClick={() => { setFilterFuel(fuel); setCurrentPage(1); }}
+                        className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all ${
+                          filterFuel === fuel
+                            ? 'bg-white shadow-sm border ' + (
+                                fuel === 'Electric' ? 'text-yellow-700 border-yellow-200' :
+                                fuel === 'Hybrid' ? 'text-green-700 border-green-200' :
+                                fuel === 'Diesel' ? 'text-gray-700 border-gray-300' :
+                                fuel === 'Petrol' ? 'text-orange-700 border-orange-200' :
+                                'text-blue-700 border-blue-200'
+                              )
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {fuel === 'ALL' ? 'All Fuel' : fuel}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Make Filter */}
+                  {makes.length > 0 && (
+                    <select
+                      value={filterMake}
+                      onChange={e => { setFilterMake(e.target.value); setCurrentPage(1); }}
+                      className={`px-3 py-2 rounded-lg text-xs font-semibold border transition-all appearance-none cursor-pointer pr-8 bg-[url('data:image/svg+xml;charset=UTF-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2212%22%20height%3D%2212%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%236B7280%22%20stroke-width%3D%222%22%3E%3Cpath%20d%3D%22m6%209%206%206%206-6%22%2F%3E%3C%2Fsvg%3E')] bg-[length:12px] bg-[right_8px_center] bg-no-repeat ${
+                        filterMake !== 'ALL'
+                          ? 'bg-blue-50 text-blue-700 border-blue-200'
+                          : 'bg-gray-50 text-gray-600 border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <option value="ALL">All Makes</option>
+                      {makes.map(m => <option key={m} value={m}>{m}</option>)}
+                    </select>
+                  )}
+                  {/* Clear Filters */}
+                  {activeFilterCount > 0 && (
+                    <button
+                      onClick={clearFilters}
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    >
+                      <X size={14} /> Clear
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* TABLE VIEW */}

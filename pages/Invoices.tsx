@@ -4,7 +4,7 @@ import { Pagination, paginate } from '../components/Pagination';
 import { PDFService } from '../services/pdf';
 import { emailService } from '../services/emailService';
 import { payfastService } from '../services/payfastService';
-import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail } from 'lucide-react';
+import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail, SlidersHorizontal } from 'lucide-react';
 import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer, CompanyProfile } from '../types';
 import { companyProfile as companyProfileService } from '../services/companyProfile';
 
@@ -20,6 +20,7 @@ export const Sales: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'Invoice' | 'Quote'>('Invoice');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [filterStatus, setFilterStatus] = useState<string>('ALL');
 
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -370,11 +371,25 @@ export const Sales: React.FC = () => {
     alert("Quote converted to Job successfully!");
   };
 
-  const filteredDocs = salesDocs.filter(doc =>
-    doc.type === activeTab &&
-    (doc.number.toLowerCase().includes(search.toLowerCase()) ||
-      customers.find(c => c.id === doc.customerId)?.name.toLowerCase().includes(search.toLowerCase()))
-  );
+  const filteredDocs = salesDocs.filter(doc => {
+    const matchesType = doc.type === activeTab;
+    const matchesSearch = !search || 
+      doc.number.toLowerCase().includes(search.toLowerCase()) ||
+      (customers.find(c => c.id === doc.customerId)?.name.toLowerCase().includes(search.toLowerCase()));
+    const matchesStatus = filterStatus === 'ALL' || doc.status === filterStatus;
+    return matchesType && matchesSearch && matchesStatus;
+  });
+
+  const invoiceStatuses = ['Draft', 'Sent', 'Paid', 'Overdue'];
+  const quoteStatuses = ['Draft', 'Sent', 'Accepted', 'Rejected', 'Converted'];
+  const statusOptions = activeTab === 'Invoice' ? invoiceStatuses : quoteStatuses;
+  const activeFilterCount = [filterStatus !== 'ALL', search !== ''].filter(Boolean).length;
+
+  const clearFilters = () => {
+    setSearch('');
+    setFilterStatus('ALL');
+    setCurrentPage(1);
+  };
 
   if (isLoading) {
     return (
@@ -405,13 +420,13 @@ export const Sales: React.FC = () => {
       {/* Tabs */}
       <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit">
         <button
-          onClick={() => { setActiveTab('Invoice'); setCurrentPage(1); }}
+          onClick={() => { setActiveTab('Invoice'); setCurrentPage(1); setFilterStatus('ALL'); }}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'Invoice' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
         >
           Invoices
         </button>
         <button
-          onClick={() => { setActiveTab('Quote'); setCurrentPage(1); }}
+          onClick={() => { setActiveTab('Quote'); setCurrentPage(1); setFilterStatus('ALL'); }}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'Quote' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
         >
           Quotations
@@ -468,15 +483,64 @@ export const Sales: React.FC = () => {
       {/* Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="p-4 border-b border-gray-200">
-          <div className="relative max-w-md">
-            <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
-            <input
-              type="text"
-              placeholder={`Search ${activeTab} # or Customer...`}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-              value={search}
-              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
-            />
+          <div className="flex flex-col lg:flex-row gap-4">
+            {/* Search */}
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+              <input
+                type="text"
+                placeholder={`Search ${activeTab} # or Customer...`}
+                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-300 outline-none transition-all"
+                value={search}
+                onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
+              />
+            </div>
+            {/* Status Filter */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 text-sm text-gray-500 mr-1">
+                <SlidersHorizontal size={16} />
+                {activeFilterCount > 0 && (
+                  <span className="bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeFilterCount}</span>
+                )}
+              </div>
+              <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
+                <button
+                  onClick={() => { setFilterStatus('ALL'); setCurrentPage(1); }}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                    filterStatus === 'ALL' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  All
+                </button>
+                {statusOptions.map(status => (
+                  <button
+                    key={status}
+                    onClick={() => { setFilterStatus(status); setCurrentPage(1); }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                      filterStatus === status
+                        ? 'bg-white shadow-sm border ' + (
+                            status === 'Paid' || status === 'Accepted' ? 'text-green-700 border-green-200' :
+                            status === 'Overdue' || status === 'Rejected' ? 'text-red-700 border-red-200' :
+                            status === 'Sent' ? 'text-blue-700 border-blue-200' :
+                            status === 'Converted' ? 'text-purple-700 border-purple-200' :
+                            'text-gray-700 border-gray-200'
+                          )
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+              {activeFilterCount > 0 && (
+                <button
+                  onClick={clearFilters}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                >
+                  <X size={14} /> Clear
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

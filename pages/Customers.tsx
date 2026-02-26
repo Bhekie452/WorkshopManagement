@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { Pagination, paginate } from '../components/Pagination';
-import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2, Trash2 } from 'lucide-react';
+import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2, Trash2, Filter, SlidersHorizontal } from 'lucide-react';
 import { Customer, Attachment, ContactChannel } from '../types';
 
 export const Customers: React.FC = () => {
@@ -15,6 +15,8 @@ export const Customers: React.FC = () => {
   const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [filterType, setFilterType] = useState<string>('ALL');
+  const [filterConsent, setFilterConsent] = useState<string>('ALL');
 
   const loadData = async () => {
     setIsLoading(true);
@@ -108,11 +110,25 @@ export const Customers: React.FC = () => {
     }
   };
 
-  const filteredCustomers = customers.filter(c =>
-    c.name.toLowerCase().includes(search.toLowerCase()) ||
-    c.email.toLowerCase().includes(search.toLowerCase()) ||
-    c.phone.includes(search)
-  );
+  const filteredCustomers = customers.filter(c => {
+    const matchesSearch = !search || 
+      c.name.toLowerCase().includes(search.toLowerCase()) ||
+      c.email.toLowerCase().includes(search.toLowerCase()) ||
+      c.phone.includes(search);
+    const matchesType = filterType === 'ALL' || (c.type || 'Private') === filterType;
+    const matchesConsent = filterConsent === 'ALL' || 
+      (filterConsent === 'Yes' ? c.consent : !c.consent);
+    return matchesSearch && matchesType && matchesConsent;
+  });
+
+  const activeFilterCount = [filterType !== 'ALL', filterConsent !== 'ALL', search !== ''].filter(Boolean).length;
+
+  const clearFilters = () => {
+    setSearch('');
+    setFilterType('ALL');
+    setFilterConsent('ALL');
+    setCurrentPage(1);
+  };
 
   if (isLoading && customers.length === 0) {
     return (
@@ -137,16 +153,72 @@ export const Customers: React.FC = () => {
         </button>
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-md">
-        <Search className="absolute left-3 top-2.5 text-gray-400" size={20} />
-        <input
-          type="text"
-          placeholder="Search by name, email, or phone..."
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
-          value={search}
-          onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
-        />
+      {/* Filter Bar */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+        <div className="flex flex-col lg:flex-row gap-4">
+          {/* Search */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <input
+              type="text"
+              placeholder="Search by name, email, or phone..."
+              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-300 outline-none transition-all"
+              value={search}
+              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
+            />
+          </div>
+          {/* Filter Controls */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 text-sm text-gray-500 mr-1">
+              <SlidersHorizontal size={16} />
+              <span className="hidden sm:inline font-medium">Filters</span>
+              {activeFilterCount > 0 && (
+                <span className="bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeFilterCount}</span>
+              )}
+            </div>
+            {/* Type Filter */}
+            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
+              {['ALL', 'Private', 'Fleet', 'Government'].map(type => (
+                <button
+                  key={type}
+                  onClick={() => { setFilterType(type); setCurrentPage(1); }}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                    filterType === type
+                      ? 'bg-white text-blue-700 shadow-sm border border-blue-200'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {type === 'ALL' ? 'All Types' : type}
+                </button>
+              ))}
+            </div>
+            {/* Consent Filter */}
+            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
+              {['ALL', 'Yes', 'No'].map(val => (
+                <button
+                  key={val}
+                  onClick={() => { setFilterConsent(val); setCurrentPage(1); }}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                    filterConsent === val
+                      ? 'bg-white shadow-sm border ' + (val === 'Yes' ? 'text-green-700 border-green-200' : val === 'No' ? 'text-red-700 border-red-200' : 'text-blue-700 border-blue-200')
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {val === 'ALL' ? 'Consent' : val === 'Yes' ? '✓ Consented' : '✗ Pending'}
+                </button>
+              ))}
+            </div>
+            {/* Clear Filters */}
+            {activeFilterCount > 0 && (
+              <button
+                onClick={clearFilters}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+              >
+                <X size={14} /> Clear
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
