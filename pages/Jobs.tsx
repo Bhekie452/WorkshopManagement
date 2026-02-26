@@ -691,7 +691,29 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                                                         }
                                                     } catch (err) {
                                                         console.error('AI checklist generation failed:', err);
-                                                        alert('Failed to generate checklist. Check your Gemini API key.');
+                                                        // Fallback to local generation on any API error
+                                                        const fallbackTasks: Record<string, string[]> = {
+                                                            'Regular Service': ['Change engine oil and filter', 'Check and top up all fluids', 'Inspect brake pads and rotors', 'Check tire pressure and tread depth', 'Inspect belts and hoses', 'Test battery condition', 'Check all lights and wipers'],
+                                                            'Diagnostics': ['Connect OBD-II scanner and read codes', 'Perform live data analysis', 'Check for pending and stored DTCs', 'Inspect wiring and connectors', 'Test sensor readings against specs', 'Clear codes and road test'],
+                                                            'Tire Rotation': ['Remove all wheels', 'Inspect tire tread depth', 'Rotate tires per pattern', 'Check for uneven wear', 'Torque lug nuts to spec', 'Set tire pressures'],
+                                                            'Brake Service': ['Inspect brake pads thickness', 'Check brake fluid level and condition', 'Inspect rotors for wear/scoring', 'Check brake lines for leaks', 'Test parking brake', 'Road test brakes'],
+                                                            'Software Update': ['Back up current ECU data', 'Connect diagnostic tool', 'Download latest firmware', 'Flash ECU/TCU modules', 'Verify update installation', 'Clear adaptation values', 'Road test and verify'],
+                                                            'Oil Change': ['Drain old engine oil', 'Replace oil filter', 'Add new oil to spec', 'Check for leaks', 'Reset oil life monitor', 'Record mileage'],
+                                                            'Inspection': ['Check all exterior lights', 'Inspect windshield and wipers', 'Check tire condition and pressure', 'Inspect exhaust system', 'Check suspension components', 'Test horn and mirrors', 'Verify fluid levels'],
+                                                        };
+                                                        const serviceKey = Object.keys(fallbackTasks).find(k =>
+                                                            formData.serviceType?.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(formData.serviceType?.toLowerCase() || '')
+                                                        );
+                                                        const taskList = fallbackTasks[serviceKey || 'Regular Service'] || fallbackTasks['Regular Service'];
+                                                        setFormData({
+                                                            ...formData,
+                                                            tasks: taskList.map((desc, i) => ({
+                                                                id: (Date.now() + i).toString(),
+                                                                description: desc,
+                                                                completed: false
+                                                            }))
+                                                        });
+                                                        setActiveTab('workflow');
                                                     } finally {
                                                         setIsGeneratingChecklist(false);
                                                     }
