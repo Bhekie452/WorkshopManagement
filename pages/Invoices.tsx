@@ -42,24 +42,20 @@ export const Sales: React.FC = () => {
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [fetchedDocs, fetchedCustomers, fetchedVehicles, fetchedJobs, profile] = await Promise.all([
-        store.getInvoices(),
-        store.getCustomers(),
-        store.getVehicles(),
-        store.getJobs(),
-        companyProfileService.getProfile().catch(() => null)
-      ]);
-      setSalesDocs(fetchedDocs);
-      setCustomers(fetchedCustomers);
-      setVehicles(fetchedVehicles);
-      setJobs(fetchedJobs);
-      if (profile) setWorkshopProfile(profile);
+      // Load synchronous store data immediately
+      setSalesDocs(store.getInvoices());
+      setCustomers(store.getCustomers());
+      setVehicles(store.getVehicles());
+      setJobs(store.getJobs());
     } catch (error) {
       console.error("Failed to load data", error);
-      alert("Failed to load data. Please check connection.");
     } finally {
       setIsLoading(false);
     }
+    // Load Firestore profile in background (don't block page render)
+    companyProfileService.getProfile()
+      .then(profile => { if (profile) setWorkshopProfile(profile); })
+      .catch(() => {});
   };
 
   useEffect(() => {
