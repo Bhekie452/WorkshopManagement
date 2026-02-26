@@ -640,6 +640,7 @@ export const Jobs: React.FC = () => {
                                                                     completed: false
                                                                 }))
                                                             });
+                                                            setActiveTab('workflow');
                                                             setIsGeneratingChecklist(false);
                                                             return;
                                                         }
@@ -657,24 +658,34 @@ Return ONLY a JSON array of strings, each being a clear, actionable task step. E
 Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`;
 
                                                         const response = await ai.models.generateContent({
-                                                            model: 'gemini-2.5-flash',
+                                                            model: 'gemini-2.0-flash',
                                                             contents: prompt,
                                                         });
 
-                                                        const text = response.text || '[]';
-                                                        // Extract JSON array from response (handle markdown code blocks)
-                                                        const jsonMatch = text.match(/\[\s*[\s\S]*?\]/);
-                                                        const tasks: string[] = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+                                                        const text = (response.text || '').trim();
+                                                        console.log('[AI Checklist] Raw response:', text);
+                                                        
+                                                        // Extract JSON array — handle ```json ... ``` wrapping
+                                                        let jsonStr = text;
+                                                        const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+                                                        if (codeBlockMatch) {
+                                                            jsonStr = codeBlockMatch[1].trim();
+                                                        }
+                                                        // Find the array in the string
+                                                        const arrayMatch = jsonStr.match(/\[[\s\S]*\]/);
+                                                        const tasks: string[] = arrayMatch ? JSON.parse(arrayMatch[0]) : [];
 
                                                         if (tasks.length > 0) {
                                                             setFormData({
                                                                 ...formData,
                                                                 tasks: tasks.map((desc, i) => ({
                                                                     id: (Date.now() + i).toString(),
-                                                                    description: desc,
+                                                                    description: String(desc),
                                                                     completed: false
                                                                 }))
                                                             });
+                                                            // Auto-switch to Workflow tab so user can see the generated tasks
+                                                            setActiveTab('workflow');
                                                         } else {
                                                             alert('AI returned no tasks. Try a more detailed description.');
                                                         }
