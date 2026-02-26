@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
-import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2, Trash2, Edit } from 'lucide-react';
+import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2, Trash2, Edit, LayoutList, LayoutGrid } from 'lucide-react';
 import { Vehicle, Customer, Job } from '../types';
 
 export const Vehicles: React.FC = () => {
@@ -25,6 +25,8 @@ export const Vehicles: React.FC = () => {
     const [editData, setEditData] = useState<Partial<Vehicle>>({});
 
     const [newVehicle, setNewVehicle] = useState<Partial<Vehicle>>({ fuelType: 'Petrol' });
+    const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+    const [searchQuery, setSearchQuery] = useState('');
 
     const loadData = async () => {
         setIsLoading(true);
@@ -159,6 +161,19 @@ export const Vehicles: React.FC = () => {
         );
     }
 
+    const filteredVehicles = vehicles.filter(v => {
+        if (!searchQuery) return true;
+        const q = searchQuery.toLowerCase();
+        const owner = customers.find(c => c.id === v.ownerId);
+        return (
+            `${v.year} ${v.make} ${v.model}`.toLowerCase().includes(q) ||
+            v.registration.toLowerCase().includes(q) ||
+            v.vin.toLowerCase().includes(q) ||
+            (owner?.name || '').toLowerCase().includes(q) ||
+            v.fuelType.toLowerCase().includes(q)
+        );
+    });
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -171,8 +186,109 @@ export const Vehicles: React.FC = () => {
                 </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {vehicles.map((v) => {
+            {/* Search & View Toggle Bar */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                <div className="relative flex-1 w-full sm:max-w-xs">
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+                        type="text"
+                        placeholder="Search vehicles..."
+                        value={searchQuery}
+                        onChange={e => setSearchQuery(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                </div>
+                <div className="flex items-center gap-1 ml-auto">
+                    <div className="h-6 w-px bg-gray-200 mx-1" />
+                    <button
+                        onClick={() => setViewMode('list')}
+                        className={`p-2 rounded-lg transition-colors ${viewMode === 'list' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                        title="Table View"
+                    >
+                        <LayoutList size={18} />
+                    </button>
+                    <button
+                        onClick={() => setViewMode('grid')}
+                        className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-blue-100 text-blue-700' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                        title="Grid View"
+                    >
+                        <LayoutGrid size={18} />
+                    </button>
+                </div>
+            </div>
+
+            {/* TABLE VIEW */}
+            {viewMode === 'list' && (
+                <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
+                    <table className="w-full text-sm">
+                        <thead>
+                            <tr className="border-b border-gray-200 bg-gray-50">
+                                <th className="text-left px-4 py-3 font-semibold text-gray-500 uppercase text-xs tracking-wider">Vehicle</th>
+                                <th className="text-left px-4 py-3 font-semibold text-gray-500 uppercase text-xs tracking-wider">Registration</th>
+                                <th className="text-left px-4 py-3 font-semibold text-gray-500 uppercase text-xs tracking-wider hidden md:table-cell">VIN</th>
+                                <th className="text-left px-4 py-3 font-semibold text-gray-500 uppercase text-xs tracking-wider">Owner</th>
+                                <th className="text-left px-4 py-3 font-semibold text-gray-500 uppercase text-xs tracking-wider hidden sm:table-cell">Fuel Type</th>
+                                <th className="text-right px-4 py-3 font-semibold text-gray-500 uppercase text-xs tracking-wider">Mileage</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {filteredVehicles.map((v) => {
+                                const owner = customers.find(c => c.id === v.ownerId);
+                                return (
+                                    <tr
+                                        key={v.id}
+                                        onClick={() => openDetails(v)}
+                                        className="hover:bg-blue-50 cursor-pointer transition-colors"
+                                    >
+                                        <td className="px-4 py-3">
+                                            <div className="flex items-center gap-3">
+                                                <div className="bg-gray-100 p-1.5 rounded-lg">
+                                                    <Car size={18} className="text-slate-600" />
+                                                </div>
+                                                <div>
+                                                    <p className="font-semibold text-gray-900">{v.year} {v.make} {v.model}</p>
+                                                    <p className="text-xs text-gray-400 md:hidden">{v.vin}</p>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <span className="inline-block bg-slate-100 text-slate-800 text-xs font-bold px-2 py-1 rounded border border-slate-200">
+                                                {v.registration}
+                                            </span>
+                                        </td>
+                                        <td className="px-4 py-3 text-gray-600 hidden md:table-cell font-mono text-xs">{v.vin}</td>
+                                        <td className="px-4 py-3 font-medium text-gray-900">{owner?.name || 'Unknown'}</td>
+                                        <td className="px-4 py-3 hidden sm:table-cell">
+                                            <div className="flex items-center gap-1 text-gray-700">
+                                                {getFuelIcon(v.fuelType)} {v.fuelType}
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3 text-right">
+                                            <div className="flex items-center justify-end gap-2">
+                                                <span className="font-medium text-gray-900">{v.mileage.toLocaleString()} km</span>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); openHistory(v); }}
+                                                    className="text-blue-600 hover:bg-blue-100 p-1 rounded transition-colors"
+                                                    title="Mileage History"
+                                                >
+                                                    <History size={14} />
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                    {filteredVehicles.length === 0 && (
+                        <div className="text-center py-8 text-gray-400">No vehicles match your search.</div>
+                    )}
+                </div>
+            )}
+
+            {/* GRID VIEW */}
+            {viewMode === 'grid' && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredVehicles.map((v) => {
                     const owner = customers.find(c => c.id === v.ownerId);
                     return (
                         <div
@@ -226,11 +342,11 @@ export const Vehicles: React.FC = () => {
                         </div>
                     )
                 })}
-            </div>
+            </div>}
 
-            {vehicles.length === 0 && !isLoading && (
+            {filteredVehicles.length === 0 && viewMode === 'grid' && (
                 <div className="text-center py-12 text-gray-500">
-                    No vehicles found in the database.
+                    {searchQuery ? 'No vehicles match your search.' : 'No vehicles found in the database.'}
                 </div>
             )}
 
