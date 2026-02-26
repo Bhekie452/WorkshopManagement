@@ -24,6 +24,7 @@ export interface BatteryHealthLog {
   cells: Array<{ cell: string; voltage: number }>;
 }
 export enum UserRole {
+  SYSTEM_ADMIN = 'SYSTEM_ADMIN',
   ADMIN = 'ADMIN',
   MANAGER = 'MANAGER',
   TECHNICIAN = 'TECHNICIAN',
@@ -56,6 +57,42 @@ export interface User {
   bio?: string;
   role: UserRole;
   avatar?: string;
+  companyId?: string;
+  permissions?: string[];
+  createdAt?: string;
+  lastLogin?: string;
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  logo?: string;
+  industry?: string;
+  subscription?: 'free' | 'basic' | 'premium' | 'enterprise';
+  maxUsers?: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface Permission {
+  id: string;
+  name: string;
+  description: string;
+  module?: string;
+  category?: string;
+}
+
+export interface Role {
+  id: string;
+  name: string;
+  description: string;
+  permissions: string[];
+  color?: string;
+  isSystem?: boolean;
 }
 
 export interface MileageRecord {

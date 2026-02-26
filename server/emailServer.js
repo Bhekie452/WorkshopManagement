@@ -13,7 +13,7 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { randomUUID } = require('crypto');
-require('dotenv').config();
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -510,16 +510,131 @@ app.post('/api/payment/notify', optionalEmailAuth, (req, res) => {
   return res.send('OK');
 });
 
+// ---------- Messaging (SMS/WhatsApp via Twilio) ----------
+const twilioAccountSid = process.env.TWILIO_ACCOUNT_SID;
+const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
+const twilioPhoneNumber = process.env.TWILIO_PHONE_NUMBER;
+const twilioWhatsAppNumber = process.env.TWILIO_WHATSAPP_NUMBER;
+
+let twilioClient = null;
+if (twilioAccountSid && twilioAuthToken) {
+  try {
+    const twilio = require('twilio');
+    twilioClient = twilio(twilioAccountSid, twilioAuthToken);
+    console.log('✅ Twilio configured');
+  } catch (err) {
+    console.warn('⚠️ Twilio not configured:', err.message);
+  }
+}
+
+app.post('/api/messages/send', optionalEmailAuth, async (req, res) => {
+  const { to, message, channel = 'sms' } = req.body;
+
+  if (!to || !message) {
+    return res.status(400).json({ error: 'Missing required fields: to, message' });
+  }
+
+  console.log(`\n📱 [Messaging] Sending ${channel.toUpperCase()} to ${to}`);
+
+  // If Twilio not configured, log and return mock success
+  if (!twilioClient) {
+    console.log('⚠️ Twilio not configured - message logged but not sent');
+    console.log('Message:', message);
+    return res.json({
+      success: true,
+      messageId: `mock-${Date.now()}`,
+      channel,
+      note: 'Twilio not configured - message logged only',
+    });
+  }
+
+  try {
+    let result;
+    if (channel === 'whatsapp') {
+      // Send WhatsApp via Twilio
+      result = await twilioClient.messages.create({
+        body: message,
+        from: `whatsapp:${twilioWhatsAppNumber || twilioPhoneNumber}`,
+        to: `whatsapp:${to}`,
+      });
+    } else {
+      // Send SMS via Twilio
+      result = await twilioClient.messages.create({
+        body: message,
+        from: twilioPhoneNumber,
+        to: to,
+      });
+    }
+
+    console.log(`✅ Message sent: ${result.sid}`);
+    return res.json({
+      success: true,
+      messageId: result.sid,
+      channel,
+      status: result.status,
+    });
+  } catch (error) {
+    console.error(`❌ Failed to send ${channel}:`, error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+      channel,
+    });
+  }
+});
+
+app.post('/api/messages/bulk', optionalEmailAuth, async (req, res) => {
+  const { messages } = req.body;
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages array required' });
+  }
+
+  console.log(`\n📱 [Messaging] Sending ${messages.length} bulk messages`);
+
+  const results = [];
+  for (const msg of messages) {
+    const { to, message, channel = 'sms' } = msg;
+
+    if (!twilioClient) {
+      results.push({ to, success: true, messageId: `mock-${Date.now()}`, channel });
+      continue;
+    }
+
+    try {
+      let result;
+      if (channel === 'whatsapp') {
+        result = await twilioClient.messages.create({
+          body: message,
+          from: `whatsapp:${twilioWhatsAppNumber || twilioPhoneNumber}`,
+          to: `whatsapp:${to}`,
+        });
+      } else {
+        result = await twilioClient.messages.create({
+          body: message,
+          from: twilioPhoneNumber,
+          to: to,
+        });
+      }
+      results.push({ to, success: true, messageId: result.sid, channel });
+    } catch (error) {
+      results.push({ to, success: false, error: error.message, channel });
+    }
+  }
+
+  return res.json({ results });
+});
+
 // ---------- Start ----------
 app.listen(PORT, () => {
   ensureUserStore();
   console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║          📧 Email + Auth Server Started                   ║
+║      📧 Email + Messaging + Auth Server Started           ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  URL: http://localhost:${PORT}                              ║
 ║  SendGrid: ${sendgridApiKey ? '✅ Configured' : '❌ Not configured'}                      ║
-║  From: ${fromEmail}                                       ║
+║  Twilio: ${twilioClient ? '✅ Configured' : '❌ Not configured'}                        ║
 ║  Auth: ✅ bcrypt + JWT enabled                            ║
 ╚═══════════════════════════════════════════════════════════╝
 
@@ -531,6 +646,8 @@ app.listen(PORT, () => {
    GET  /api/auth/me
    POST /api/send
    POST /api/send/bulk
+   POST /api/messages/send
+   POST /api/messages/bulk
    POST /api/payment/notify
    GET  /health
   `);

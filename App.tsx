@@ -9,6 +9,7 @@ import { companyProfile as companyProfileService } from './services/companyProfi
 import { emailService } from './services/emailService';
 import { User, UserRole } from './types';
 import { AuthProvider, useAuth } from './components/AuthContext';
+import { ThemeProvider } from './components/ThemeContext';
 import { Permission } from './services/rbac';
 
 // Lazy Load Pages
@@ -23,6 +24,11 @@ const Analytics = React.lazy(() => import('./pages/Analytics').then(module => ({
 const Schedule = React.lazy(() => import('./pages/Schedule').then(module => ({ default: module.Schedule })));
 const Sales = React.lazy(() => import('./pages/Invoices').then(module => ({ default: module.Sales })));
 const Settings = React.lazy(() => import('./pages/Settings').then(module => ({ default: module.Settings })));
+
+// Admin Pages
+const Companies = React.lazy(() => import('./pages/Companies'));
+const UsersManagement = React.lazy(() => import('./pages/UsersManagement'));
+const RolesPermissions = React.lazy(() => import('./pages/RolesPermissions'));
 
 /** Renders children only if user has permission, otherwise redirects to / */
 const ProtectedRoute: React.FC<{ permission: Permission; children: React.ReactNode }> = ({ permission, children }) => {
@@ -259,12 +265,13 @@ const App: React.FC = () => {
   }
 
   return (
-    <AuthProvider user={user}>
-      <Router>
-        <Layout user={user} onLogout={handleLogout}>
-          <ErrorBoundary>
-            <Suspense fallback={<LoadingSpinner />}>
-              <Routes>
+    <ThemeProvider>
+      <AuthProvider user={user}>
+        <Router>
+          <Layout user={user} onLogout={handleLogout}>
+            <ErrorBoundary>
+              <Suspense fallback={<LoadingSpinner />}>
+                <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/jobs" element={<ProtectedRoute permission={Permission.VIEW_JOBS}><Jobs /></ProtectedRoute>} />
                 <Route path="/schedule" element={<ProtectedRoute permission={Permission.VIEW_SCHEDULE}><Schedule /></ProtectedRoute>} />
@@ -276,13 +283,18 @@ const App: React.FC = () => {
                 <Route path="/sales" element={<ProtectedRoute permission={Permission.VIEW_INVOICES}><Sales /></ProtectedRoute>} />
                 <Route path="/analytics" element={<ProtectedRoute permission={Permission.VIEW_REPORTS}><Analytics /></ProtectedRoute>} />
                 <Route path="/settings" element={<ProtectedRoute permission={Permission.VIEW_SETTINGS}><Settings /></ProtectedRoute>} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </Suspense>
-          </ErrorBoundary>
-        </Layout>
-      </Router>
-    </AuthProvider>
+                {/* System Admin Routes */}
+                <Route path="/admin/companies" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><Companies currentUser={user} /></ProtectedRoute>} />
+                <Route path="/admin/users" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><UsersManagement currentUser={user} /></ProtectedRoute>} />
+                <Route path="/admin/roles" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><RolesPermissions /></ProtectedRoute>} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </Suspense>
+            </ErrorBoundary>
+          </Layout>
+        </Router>
+      </AuthProvider>
+    </ThemeProvider>
   );
 };
 

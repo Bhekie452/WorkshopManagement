@@ -5,13 +5,14 @@ import { Pagination, paginate } from '../components/Pagination';
 import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
 import { emailService } from '../services/emailService';
+import { messagingService } from '../services/messagingService';
 import { GoogleGenAI } from '@google/genai';
 import { Job, JobStatus, Priority, Customer, Vehicle, Part, JobTask, JobPartUsage, JobLabor, Attachment } from '../types';
 import { 
   Plus, Filter, Search, Calendar, ChevronRight, X, BrainCircuit, Users, 
   Settings, PenTool, ClipboardList, MessageCircle, Mail, Smartphone,
   Clock, Package, AlertTriangle, CheckCircle2, History, Send, Gauge,
-  Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid, SlidersHorizontal
+  Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid, SlidersHorizontal, Printer
 } from 'lucide-react';
 
 // 10 Predefined Service Types
@@ -63,6 +64,10 @@ export const Jobs: React.FC = () => {
   
   // Sending Notification State
   const [isSendingNotif, setIsSendingNotif] = useState(false);
+  
+  // Print Job Card State
+  const [isPrintViewOpen, setIsPrintViewOpen] = useState(false);
+  const [printingJob, setPrintingJob] = useState<Job | null>(null);
 
   // Form State
   const [formData, setFormData] = useState<Partial<Job>>({
@@ -102,6 +107,15 @@ export const Jobs: React.FC = () => {
     setCustomers(store.getCustomers());
     setVehicles(store.getVehicles());
     setInventory(store.getParts());
+  };
+
+  const handlePrintJobCard = (job: Job) => {
+    setPrintingJob(job);
+    setIsPrintViewOpen(true);
+  };
+  
+  const handlePrint = () => {
+    window.print();
   };
 
   const handleCreate = () => {
@@ -166,12 +180,69 @@ export const Jobs: React.FC = () => {
     if (selectedJob) {
       store.updateJob({ ...selectedJob, ...jobData } as Job);
       store.addJobLog(selectedJob.id, 'Updated', 'Job details updated manually');
+
+      // Auto-send SMS on status change
+      const oldStatus = selectedJob.status;
+      const newStatus = jobData.status;
+      if (oldStatus !== newStatus && newStatus) {
+        const customer = customers.find(c => c.id === jobData.customerId);
+        const vehicle = vehicles.find(v => v.id === jobData.vehicleId);
+        if (customer?.phone && vehicle) {
+          const workshopName = 'Workshop';
+          const vars = {
+            customerName: customer.name,
+            vehicleReg: vehicle.registration,
+            jobNumber: selectedJob.id.slice(0, 8),
+            workshopName,
+            dueDate: jobData.dueDate ? new Date(jobData.dueDate).toLocaleDateString() : 'TBD',
+            totalCost: String(jobData.estimatedCost || 0),
+            hours: '8am - 5pm',
+          };
+          let templateId: string | null = null;
+          if (newStatus === JobStatus.IN_PROGRESS) templateId = 'job_in_progress';
+          else if (newStatus === JobStatus.AWAITING_PARTS) templateId = 'job_awaiting_approval';
+          else if (newStatus === JobStatus.COMPLETED) templateId = 'job_ready';
+
+          if (templateId) {
+            messagingService.sendTemplatedMessage(customer.phone, templateId, vars).then(res => {
+              if (res.success) console.log(`[SMS] Auto-sent ${templateId} to ${customer.name}`);
+            }).catch(err => console.error('[SMS] Auto-notify failed:', err));
+          }
+
+          // Also send email notification
+          if (customer.email && newStatus) {
+            const vehicleInfo = `${vehicle.make} ${vehicle.model} (${vehicle.registration})`;
+            emailService.sendJobStatusUpdate(customer.email, customer.name, selectedJob.id, newStatus, vehicleInfo)
+              .catch(err => console.error('[Email] Auto-notify failed:', err));
+          }
+        }
+      }
     } else {
-      store.addJob({
+      const newJob = store.addJob({
         ...jobData,
         createdAt: new Date().toISOString(),
         notes: ''
       } as Job);
+
+      // Auto-send SMS for new job
+      const customer = customers.find(c => c.id === jobData.customerId);
+      const vehicle = vehicles.find(v => v.id === jobData.vehicleId);
+      if (customer && vehicle) {
+        if (customer.phone) {
+          messagingService.sendTemplatedMessage(customer.phone, 'job_received', {
+            customerName: customer.name,
+            vehicleReg: vehicle.registration,
+            jobNumber: (newJob?.id || '').slice(0, 8),
+            workshopName: 'Workshop',
+          }).catch(err => console.error('[SMS] New job notify failed:', err));
+        }
+        // Also send email
+        if (customer.email) {
+          const vehicleInfo = `${vehicle.make} ${vehicle.model} (${vehicle.registration})`;
+          emailService.sendJobStatusUpdate(customer.email, customer.name, newJob?.id || '', 'Pending', vehicleInfo)
+            .catch(err => console.error('[Email] New job notify failed:', err));
+        }
+      }
     }
     
     // 2. Update Vehicle Mileage History
@@ -356,9 +427,16 @@ export const Jobs: React.FC = () => {
           console.error('Email failed:', result.error);
         }
       } else if (type === 'SMS' || type === 'WHATSAPP') {
-        // SMS/WhatsApp - show info (would need SMS gateway integration)
-        console.log(`[${type}] Would send to ${customer.phone}: ${message}`);
-        alert(`📱 ${type} would be sent to ${customer.phone}: ${message.substring(0, 50)}...`);
+        // Send via Twilio through messagingService
+        const channel = type === 'SMS' ? 'sms' : 'whatsapp';
+        const result = await messagingService.sendMessage({
+          to: customer.phone,
+          message,
+          channel: channel as any,
+        });
+        if (!result.success) {
+          console.error(`${type} failed:`, result.error);
+        }
       }
       
       // Log notification to store regardless of delivery status
@@ -762,6 +840,13 @@ export const Jobs: React.FC = () => {
               <div className="flex items-center gap-3">
                   {selectedJob && (
                     <>
+                      <button 
+                        onClick={() => handlePrintJobCard(selectedJob)}
+                        className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 p-2 rounded-lg transition-colors"
+                        title="Print Job Card"
+                      >
+                          <Printer size={18} />
+                      </button>
                       {can(Permission.DELETE_JOB) && <button 
                         onClick={() => {
                           if (confirm(`Delete job "${selectedJob.id}"? This cannot be undone.`)) {
@@ -1577,6 +1662,257 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
               >
                 Save Labour
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* === JOB CARD PRINT VIEW / MODAL === */}
+      {isPrintViewOpen && printingJob && (
+        <div className="fixed inset-0 z-[60] bg-gray-200 flex flex-col">
+          {/* Print Header - Hidden when printing */}
+          <div className="bg-gray-800 text-white px-6 py-3 flex justify-between items-center shadow-lg shrink-0 print:hidden">
+            <h2 className="text-lg font-semibold">Job Card: {printingJob.id}</h2>
+            <div className="flex items-center gap-3">
+              <button onClick={handlePrint} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded flex items-center gap-2 transition-colors">
+                <Printer size={18} /> Print
+              </button>
+              <button onClick={() => setIsPrintViewOpen(false)} className="text-gray-300 hover:text-white p-2 rounded hover:bg-gray-700 transition-colors">
+                <X size={24} />
+              </button>
+            </div>
+          </div>
+
+          {/* Document Preview (Printable Area) */}
+          <div className="flex-1 overflow-y-auto p-8 flex justify-center bg-gray-200 print:p-0 print:overflow-visible">
+            <div id="job-card-print-area" className="bg-white shadow-2xl w-[210mm] min-h-[297mm] p-[15mm] relative text-gray-800 print:shadow-none print:w-full">
+
+              {/* Header */}
+              <div className="flex justify-between items-start mb-8 pb-6 border-b-2 border-gray-100">
+                <div>
+                  <div className="h-12 w-40 bg-slate-900 flex items-center justify-center text-white font-bold text-lg mb-3">
+                    WORKSHOP
+                  </div>
+                  <div className="text-sm text-gray-600 space-y-0.5">
+                    <p className="font-bold text-gray-900">Workshop Management</p>
+                    <p>Service Center</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <h1 className="text-3xl font-light text-gray-300 uppercase tracking-widest mb-3">JOB CARD</h1>
+                  <div className="text-sm space-y-1.5">
+                    <div className="flex justify-between gap-8">
+                      <span className="text-gray-500">Job Number:</span>
+                      <span className="font-bold font-mono">{printingJob.id.substring(0, 8).toUpperCase()}</span>
+                    </div>
+                    <div className="flex justify-between gap-8">
+                      <span className="text-gray-500">Date Created:</span>
+                      <span className="font-bold">{new Date(printingJob.createdAt).toLocaleDateString()}</span>
+                    </div>
+                    <div className="flex justify-between gap-8">
+                      <span className="text-gray-500">Due Date:</span>
+                      <span className="font-bold">{new Date(printingJob.dueDate).toLocaleDateString()}</span>
+                    </div>
+                    <div className="flex justify-between gap-8 mt-2 pt-2 border-t border-gray-100">
+                      <span className="text-gray-500">Status:</span>
+                      <span className={`font-bold px-2 py-0.5 rounded text-xs uppercase ${
+                        printingJob.status === JobStatus.COMPLETED || printingJob.status === JobStatus.PAID 
+                          ? 'bg-green-100 text-green-800' 
+                          : printingJob.status === JobStatus.IN_PROGRESS 
+                            ? 'bg-blue-100 text-blue-800' 
+                            : 'bg-yellow-100 text-yellow-800'
+                      }`}>{printingJob.status}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Customer & Vehicle Info */}
+              <div className="flex justify-between mb-8">
+                <div className="w-1/2 pr-8">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Customer</h3>
+                  {(() => {
+                    const c = customers.find(cust => cust.id === printingJob.customerId);
+                    return c ? (
+                      <div className="text-sm space-y-1">
+                        <p className="font-bold text-lg text-gray-900">{c.name}</p>
+                        <p className="text-gray-600">{c.phone}</p>
+                        <p className="text-gray-600">{c.email}</p>
+                        <p className="text-gray-600 whitespace-pre-wrap">{c.address}</p>
+                      </div>
+                    ) : <p className="text-red-500">Unknown Customer</p>;
+                  })()}
+                </div>
+                <div className="w-1/2 pl-8 border-l border-gray-100">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Vehicle Details</h3>
+                  {(() => {
+                    const v = vehicles.find(veh => veh.id === printingJob.vehicleId);
+                    return v ? (
+                      <div className="text-sm space-y-1">
+                        <p className="font-bold text-gray-900">{v.year} {v.make} {v.model}</p>
+                        <p className="text-gray-600">Registration: <span className="font-mono font-bold">{v.registration}</span></p>
+                        <p className="text-gray-600">VIN: <span className="font-mono text-xs">{v.vin}</span></p>
+                        <p className="text-gray-600">Mileage: {v.mileage.toLocaleString()} km</p>
+                        <p className="text-gray-600">Color: {v.color}</p>
+                      </div>
+                    ) : <p className="text-gray-400 italic">No vehicle linked</p>;
+                  })()}
+                </div>
+              </div>
+
+              {/* Service Details */}
+              <div className="mb-8">
+                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Service Details</h3>
+                <div className="bg-gray-50 p-4 rounded-lg">
+                  <div className="flex justify-between items-start mb-2">
+                    <span className="font-bold text-lg text-gray-900">{printingJob.serviceType}</span>
+                    <span className={`text-xs px-2 py-1 rounded font-bold ${
+                      printingJob.priority === Priority.HIGH 
+                        ? 'bg-red-100 text-red-700' 
+                        : printingJob.priority === Priority.LOW 
+                          ? 'bg-gray-100 text-gray-600' 
+                          : 'bg-yellow-100 text-yellow-700'
+                    }`}>{printingJob.priority} PRIORITY</span>
+                  </div>
+                  <p className="text-gray-600 whitespace-pre-wrap">{printingJob.description}</p>
+                </div>
+              </div>
+
+              {/* Tasks */}
+              {printingJob.tasks && printingJob.tasks.length > 0 && (
+                <div className="mb-8">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Tasks / Checklist</h3>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-semibold text-gray-700 w-12">#</th>
+                          <th className="px-4 py-2 text-left font-semibold text-gray-700">Task Description</th>
+                          <th className="px-4 py-2 text-center font-semibold text-gray-700 w-24">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {printingJob.tasks.map((task, idx) => (
+                          <tr key={task.id} className={task.completed ? 'bg-green-50' : ''}>
+                            <td className="px-4 py-2 text-gray-500">{idx + 1}</td>
+                            <td className="px-4 py-2 text-gray-800">{task.description}</td>
+                            <td className="px-4 py-2 text-center">
+                              {task.completed 
+                                ? <span className="text-green-600 font-bold">✓ Done</span> 
+                                : <span className="text-gray-400">Pending</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Parts Used */}
+              {printingJob.partsUsed && printingJob.partsUsed.length > 0 && (
+                <div className="mb-8">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Parts Used</h3>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-semibold text-gray-700">Part</th>
+                          <th className="px-4 py-2 text-right font-semibold text-gray-700 w-20">Qty</th>
+                          <th className="px-4 py-2 text-right font-semibold text-gray-700 w-28">Unit Price</th>
+                          <th className="px-4 py-2 text-right font-semibold text-gray-700 w-28">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {printingJob.partsUsed.map(part => {
+                          const p = inventory.find(inv => inv.id === part.partId);
+                          const unitPrice = part.priceAtTime || 0;
+                          return (
+                            <tr key={part.id}>
+                              <td className="px-4 py-2 text-gray-800">{p?.name || part.partId}</td>
+                              <td className="px-4 py-2 text-right text-gray-600">{part.quantity}</td>
+                              <td className="px-4 py-2 text-right text-gray-600">R{unitPrice.toLocaleString()}</td>
+                              <td className="px-4 py-2 text-right font-semibold">R{(part.quantity * unitPrice).toLocaleString()}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Labour Log */}
+              {printingJob.laborLog && printingJob.laborLog.length > 0 && (
+                <div className="mb-8">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Labour Log</h3>
+                  <div className="border border-gray-200 rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-semibold text-gray-700">Description</th>
+                          <th className="px-4 py-2 text-left font-semibold text-gray-700 w-28">Technician</th>
+                          <th className="px-4 py-2 text-right font-semibold text-gray-700 w-20">Hours</th>
+                          <th className="px-4 py-2 text-right font-semibold text-gray-700 w-28">Rate</th>
+                          <th className="px-4 py-2 text-right font-semibold text-gray-700 w-28">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {printingJob.laborLog.map(labor => (
+                          <tr key={labor.id}>
+                            <td className="px-4 py-2 text-gray-800">{labor.description}</td>
+                            <td className="px-4 py-2 text-gray-600">{labor.technicianName}</td>
+                            <td className="px-4 py-2 text-right text-gray-600">{labor.hours}h</td>
+                            <td className="px-4 py-2 text-right text-gray-600">R{labor.ratePerHour}/hr</td>
+                            <td className="px-4 py-2 text-right font-semibold">R{(labor.hours * labor.ratePerHour).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Cost Summary */}
+              <div className="mt-auto pt-6 border-t-2 border-gray-200">
+                <div className="flex justify-end">
+                  <div className="w-72">
+                    <div className="flex justify-between py-2 text-sm">
+                      <span className="text-gray-600">Parts Total:</span>
+                      <span className="font-semibold">R{(printingJob.partsUsed?.reduce((sum, p) => sum + (p.quantity * (p.priceAtTime || 0)), 0) || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between py-2 text-sm">
+                      <span className="text-gray-600">Labour Total:</span>
+                      <span className="font-semibold">R{(printingJob.laborLog?.reduce((sum, l) => sum + (l.hours * l.ratePerHour), 0) || 0).toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between py-3 border-t border-gray-200 text-lg">
+                      <span className="font-bold text-gray-900">Estimated Total:</span>
+                      <span className="font-bold text-gray-900">R{printingJob.estimatedCost.toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Signature Lines */}
+              <div className="mt-10 grid grid-cols-2 gap-8">
+                <div>
+                  <div className="border-b border-gray-400 h-12"></div>
+                  <p className="text-xs text-gray-500 mt-1">Technician Signature & Date</p>
+                </div>
+                <div>
+                  <div className="border-b border-gray-400 h-12"></div>
+                  <p className="text-xs text-gray-500 mt-1">Customer Signature & Date</p>
+                </div>
+              </div>
+
+              {/* Notes */}
+              {printingJob.notes && (
+                <div className="mt-8 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                  <h4 className="font-bold text-yellow-800 text-sm mb-1">Notes:</h4>
+                  <p className="text-sm text-yellow-900 whitespace-pre-wrap">{printingJob.notes}</p>
+                </div>
+              )}
+
             </div>
           </div>
         </div>

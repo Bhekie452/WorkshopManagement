@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
+import { messagingService } from '../services/messagingService';
+import { emailService } from '../services/emailService';
 import { Pagination, paginate } from '../components/Pagination';
 import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
@@ -58,6 +60,18 @@ export const Customers: React.FC = () => {
           await store.updateCustomer(editingId, formData);
         } else {
           await store.addCustomer(formData as Customer);
+          
+          // Send welcome SMS + Email to new customer
+          if (formData.phone) {
+            messagingService.sendTemplatedMessage(formData.phone, 'welcome_customer', {
+              customerName: formData.name || 'Customer',
+              workshopName: 'Workshop',
+            }).catch(err => console.error('[SMS] Welcome SMS failed:', err));
+          }
+          if (formData.email) {
+            emailService.sendWelcomeEmail(formData.email, formData.name || 'Customer')
+              .catch(err => console.error('[Email] Welcome email failed:', err));
+          }
         }
         await loadData(); // Refresh list from server
         setIsModalOpen(false);

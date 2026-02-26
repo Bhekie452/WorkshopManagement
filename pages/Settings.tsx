@@ -28,6 +28,10 @@ export const Settings: React.FC = () => {
   const [loadingTeam, setLoadingTeam] = useState(false);
   const [roleChanging, setRoleChanging] = useState<string | null>(null);
 
+  // Check if user has a company assigned
+  const hasCompany = userProfile?.companyId && userProfile.companyId.length > 0;
+  const isSystemAdmin = userProfile?.role === UserRole.SYSTEM_ADMIN;
+
   useEffect(() => {
     let mounted = true;
     const unsubscribe = AuthService.onAuthStateChange(async (user) => {
@@ -166,7 +170,7 @@ export const Settings: React.FC = () => {
       </div>
     );
   }
-  if (!profile) {
+  if (!profile && !userProfile) {
     return (
       <div className="p-6">
         <div className="text-gray-600">Loading settings…</div>
@@ -219,50 +223,54 @@ export const Settings: React.FC = () => {
           <UserCircle size={18} className="inline mr-2" />
           Personal
         </button>
-        <button
-          onClick={() => setActiveTab('company')}
-          className={`px-4 py-2 font-medium rounded-t-lg ${
-            activeTab === 'company' 
-              ? 'bg-blue-600 text-white' 
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          <Building2 size={18} className="inline mr-2" />
-          Company
-        </button>
-        <button
-          onClick={() => setActiveTab('banking')}
-          className={`px-4 py-2 font-medium rounded-t-lg ${
-            activeTab === 'banking' 
-              ? 'bg-blue-600 text-white' 
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          <CreditCard size={18} className="inline mr-2" />
-          Banking
-        </button>
-        <button
-          onClick={() => setActiveTab('hours')}
-          className={`px-4 py-2 font-medium rounded-t-lg ${
-            activeTab === 'hours' 
-              ? 'bg-blue-600 text-white' 
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          <Clock size={18} className="inline mr-2" />
-          Hours
-        </button>
-        <button
-          onClick={() => setActiveTab('invoice')}
-          className={`px-4 py-2 font-medium rounded-t-lg ${
-            activeTab === 'invoice' 
-              ? 'bg-blue-600 text-white' 
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          <FileText size={18} className="inline mr-2" />
-          Invoice
-        </button>
+        {(hasCompany || !isSystemAdmin) && (
+          <>
+            <button
+              onClick={() => setActiveTab('company')}
+              className={`px-4 py-2 font-medium rounded-t-lg ${
+                activeTab === 'company' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Building2 size={18} className="inline mr-2" />
+              Company
+            </button>
+            <button
+              onClick={() => setActiveTab('banking')}
+              className={`px-4 py-2 font-medium rounded-t-lg ${
+                activeTab === 'banking' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <CreditCard size={18} className="inline mr-2" />
+              Banking
+            </button>
+            <button
+              onClick={() => setActiveTab('hours')}
+              className={`px-4 py-2 font-medium rounded-t-lg ${
+                activeTab === 'hours' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Clock size={18} className="inline mr-2" />
+              Hours
+            </button>
+            <button
+              onClick={() => setActiveTab('invoice')}
+              className={`px-4 py-2 font-medium rounded-t-lg ${
+                activeTab === 'invoice' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <FileText size={18} className="inline mr-2" />
+              Invoice
+            </button>
+          </>
+        )}
         {can(Permission.MANAGE_TEAM) && (
           <button
             onClick={() => {
@@ -414,7 +422,7 @@ export const Settings: React.FC = () => {
       )}
 
       {/* Company Info Tab */}
-      {activeTab === 'company' && (
+      {activeTab === 'company' && (hasCompany || !isSystemAdmin) && profile && (
         <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="bg-blue-100 p-2 rounded-lg">
@@ -589,7 +597,7 @@ export const Settings: React.FC = () => {
       )}
 
       {/* Banking Tab */}
-      {activeTab === 'banking' && (
+      {activeTab === 'banking' && (hasCompany || !isSystemAdmin) && profile && (
         <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="bg-green-100 p-2 rounded-lg">
@@ -679,7 +687,7 @@ export const Settings: React.FC = () => {
       )}
 
       {/* Hours Tab */}
-      {activeTab === 'hours' && (
+      {activeTab === 'hours' && (hasCompany || !isSystemAdmin) && profile && (
         <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="bg-purple-100 p-2 rounded-lg">
@@ -731,7 +739,7 @@ export const Settings: React.FC = () => {
       )}
 
       {/* Invoice Tab */}
-      {activeTab === 'invoice' && (
+      {activeTab === 'invoice' && (hasCompany || !isSystemAdmin) && profile && (
         <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="bg-orange-100 p-2 rounded-lg">

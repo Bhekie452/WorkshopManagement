@@ -20,11 +20,16 @@ import {
   FileText,
   ChevronUp,
   ChevronDown,
-  User as UserIcon
+  User as UserIcon,
+  Building2,
+  Shield,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { User } from '../types';
 import { VoiceAssistant } from './VoiceAssistant';
 import { useAuth } from './AuthContext';
+import { useTheme } from './ThemeContext';
 import { Permission } from '../services/rbac';
 import { ROLE_COLORS, ROLE_LABELS } from '../services/rbac';
 
@@ -47,6 +52,27 @@ const NavItem = ({ to, icon: Icon, label, active }: { to: string, icon: any, lab
     <span className="font-medium">{label}</span>
   </Link>
 );
+
+// Theme Toggle Button for menu
+const ThemeToggleButton: React.FC = () => {
+  const { resolvedTheme, toggleTheme } = useTheme();
+  return (
+    <button 
+      onClick={toggleTheme}
+      className="flex items-center gap-3 w-full px-3 py-2 text-sm text-slate-300 hover:bg-slate-700 hover:text-white rounded-lg transition-colors"
+    >
+      {resolvedTheme === 'light' ? (
+        <>
+          <Moon size={16} className="text-slate-400" /> Dark Mode
+        </>
+      ) : (
+        <>
+          <Sun size={16} className="text-yellow-400" /> Light Mode
+        </>
+      )}
+    </button>
+  );
+};
 
 export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -143,9 +169,21 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">System</p>
              <nav>
               {can(Permission.VIEW_REPORTS) && <NavItem to="/analytics" icon={BarChart3} label="Analytics" active={location.pathname === '/analytics'} />}
-              {can(Permission.VIEW_SETTINGS) && <NavItem to="/settings" icon={Settings} label="Settings" active={location.pathname === '/settings'} />}
+              <NavItem to="/settings" icon={Settings} label="Settings" active={location.pathname === '/settings'} />
              </nav>
           </div>
+
+          {/* Admin Section - Only visible to System Admins */}
+          {can(Permission.MANAGE_SYSTEM) && (
+            <div className="mt-6 px-4">
+              <p className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-2">Administration</p>
+              <nav>
+                <NavItem to="/admin/companies" icon={Building2} label="Companies" active={location.pathname === '/admin/companies'} />
+                <NavItem to="/admin/users" icon={Users} label="All Users" active={location.pathname === '/admin/users'} />
+                <NavItem to="/admin/roles" icon={Shield} label="Roles & Permissions" active={location.pathname === '/admin/roles'} />
+              </nav>
+            </div>
+          )}
         </div>
 
         {/* User Menu Footer */}
@@ -185,6 +223,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
                       >
                          <Settings size={16} className="text-slate-400" /> Settings
                       </Link>
+                      <ThemeToggleButton />
                       <div className="h-px bg-slate-700 my-1 mx-2"></div>
                       <button 
                         onClick={() => { onLogout(); setIsUserMenuOpen(false); }}

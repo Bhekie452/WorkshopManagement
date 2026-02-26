@@ -5,6 +5,7 @@ import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
 import { PDFService } from '../services/pdf';
 import { emailService } from '../services/emailService';
+import { messagingService } from '../services/messagingService';
 import { payfastService } from '../services/payfastService';
 import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail, SlidersHorizontal } from 'lucide-react';
 import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer, CompanyProfile } from '../types';
@@ -113,6 +114,22 @@ export const Sales: React.FC = () => {
 
   const handleMarkAsPaid = (doc: Invoice) => {
     store.updateInvoice(doc.id, { status: 'Paid' });
+    
+    // Send payment confirmation SMS + Email
+    const customer = customers.find(c => c.id === doc.customerId);
+    if (customer?.phone) {
+      messagingService.sendTemplatedMessage(customer.phone, 'payment_confirmed', {
+        customerName: customer.name,
+        invoiceNumber: doc.number,
+        totalCost: String(doc.total),
+        workshopName: workshopProfile?.name || 'Workshop',
+      }).catch(err => console.error('[SMS] Payment confirmation failed:', err));
+    }
+    if (customer?.email) {
+      emailService.sendPaymentConfirmation(customer.email, customer.name, doc.number, doc.total, 'Manual')
+        .catch(err => console.error('[Email] Payment confirmation failed:', err));
+    }
+    
     refreshData();
     setOpenDropdown(null);
   };
@@ -144,6 +161,18 @@ export const Sales: React.FC = () => {
       alert(`⚠️ No email on file for ${customer?.name || 'this customer'}. ${doc.type} marked as Sent without email.`);
     }
     store.updateInvoice(doc.id, { status: 'Sent' });
+    
+    // Also send SMS notification about the invoice
+    if (customer?.phone) {
+      messagingService.sendTemplatedMessage(customer.phone, 'payment_reminder', {
+        customerName: customer.name,
+        invoiceNumber: doc.number,
+        totalCost: String(doc.total),
+        dueDate: doc.dueDate,
+        workshopName: workshopProfile?.name || 'Workshop',
+      }).catch(err => console.error('[SMS] Invoice sent notification failed:', err));
+    }
+    
     refreshData();
     setOpenDropdown(null);
   };

@@ -44,11 +44,16 @@ export enum Permission {
   // Settings
   VIEW_SETTINGS    = 'view_settings',
   MANAGE_TEAM      = 'manage_team',  // change other users' roles
+
+  // System Admin
+  MANAGE_SYSTEM    = 'manage_system',  // access admin panel (companies, users, roles)
 }
 
 // ── Role → Permission mapping ───────────────────────────────────
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
-  [UserRole.ADMIN]: Object.values(Permission),   // all permissions
+  [UserRole.SYSTEM_ADMIN]: [...Object.values(Permission)],  // all permissions including system management
+
+  [UserRole.ADMIN]: Object.values(Permission).filter(p => p !== Permission.MANAGE_SYSTEM),   // all except system management
 
   [UserRole.MANAGER]: [
     Permission.VIEW_JOBS,       Permission.CREATE_JOB,    Permission.EDIT_JOB,   Permission.DELETE_JOB,
@@ -95,6 +100,7 @@ export function getPermissions(role: UserRole): Permission[] {
 
 /** Human-readable label for each role */
 export const ROLE_LABELS: Record<UserRole, string> = {
+  [UserRole.SYSTEM_ADMIN]: 'System Admin',
   [UserRole.ADMIN]:        'Admin',
   [UserRole.MANAGER]:      'Manager',
   [UserRole.TECHNICIAN]:   'Technician',
@@ -103,6 +109,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 
 /** Color scheme for role badges */
 export const ROLE_COLORS: Record<UserRole, { bg: string; text: string; border: string }> = {
+  [UserRole.SYSTEM_ADMIN]: { bg: 'bg-red-200',    text: 'text-red-800',    border: 'border-red-300' },
   [UserRole.ADMIN]:        { bg: 'bg-red-100',    text: 'text-red-700',    border: 'border-red-200' },
   [UserRole.MANAGER]:      { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-200' },
   [UserRole.TECHNICIAN]:   { bg: 'bg-blue-100',   text: 'text-blue-700',   border: 'border-blue-200' },
@@ -111,6 +118,7 @@ export const ROLE_COLORS: Record<UserRole, { bg: string; text: string; border: s
 
 /** Description of what each role can do (for UI tooltips) */
 export const ROLE_DESCRIPTIONS: Record<UserRole, string> = {
+  [UserRole.SYSTEM_ADMIN]: 'Full system access including company management and platform administration.',
   [UserRole.ADMIN]:        'Full access to all features, team management, and system settings.',
   [UserRole.MANAGER]:      'Can manage jobs, customers, inventory, invoices, and view reports.',
   [UserRole.TECHNICIAN]:   'Can view and work on jobs, run diagnostics, and view inventory.',

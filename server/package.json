@@ -1,7 +1,7 @@
 {
   "name": "wms-email-server",
   "version": "1.0.0",
-  "description": "Email server for Workshop Management System",
+  "description": "Email and Messaging server for Workshop Management System",
   "main": "emailServer.js",
   "scripts": {
     "start": "node emailServer.js",
@@ -13,6 +13,7 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
     "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "twilio": "^5.12.2"
   }
 }

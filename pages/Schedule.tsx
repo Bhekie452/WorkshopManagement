@@ -1,6 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
+import { messagingService } from '../services/messagingService';
+import { emailService } from '../services/emailService';
 import { 
   Calendar as CalendarIcon, Clock, Plus, ChevronLeft, ChevronRight, 
   User, MapPin, Repeat, AlignJustify, Grid3X3, Columns, LayoutList, X, Check, Trash2
@@ -122,6 +124,27 @@ export const Schedule: React.FC = () => {
       store.updateAppointment(editingId, formData);
     } else {
       store.addAppointment(formData as Appointment);
+      
+      // Send appointment confirmation SMS + Email
+      const customer = customers.find(c => c.id === formData.customerId);
+      const vehicle = formData.vehicleId ? vehicles.find(v => v.id === formData.vehicleId) : null;
+      if (customer && formData.start) {
+        const startDate = new Date(formData.start);
+        if (customer.phone) {
+          messagingService.sendTemplatedMessage(customer.phone, 'appointment_confirmation', {
+            customerName: customer.name,
+            serviceType: formData.type || 'Service',
+            appointmentDate: startDate.toLocaleDateString(),
+            appointmentTime: startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            workshopName: 'Workshop',
+          }).catch(err => console.error('[SMS] Appointment confirmation failed:', err));
+        }
+        if (customer.email) {
+          const vehicleInfo = vehicle ? `${vehicle.make} ${vehicle.model} (${vehicle.registration})` : '';
+          emailService.sendAppointmentReminder(customer.email, customer.name, formData.start, formData.type || 'Service', vehicleInfo)
+            .catch(err => console.error('[Email] Appointment confirmation failed:', err));
+        }
+      }
     }
     setIsModalOpen(false);
     setEditingId(null);
