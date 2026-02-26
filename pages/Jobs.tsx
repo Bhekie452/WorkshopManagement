@@ -11,6 +11,9 @@ import {
   Paperclip, Image, FileText, Upload, Loader2, Trash2
 } from 'lucide-react';
 
+// Track Gemini API quota cooldown (skip API calls for 60s after a 429)
+let geminiCooldownUntil = 0;
+
 export const Jobs: React.FC = () => {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -619,7 +622,7 @@ export const Jobs: React.FC = () => {
                                                         const vehicle = vehicles.find(v => v.id === formData.vehicleId);
                                                         const vehicleInfo = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model} (${vehicle.fuelType}, ${vehicle.mileage}km)` : 'Unknown vehicle';
 
-                                                        if (!apiKey) {
+                                                        if (!apiKey || Date.now() < geminiCooldownUntil) {
                                                             // Fallback: generate context-aware mock tasks based on service type
                                                             const fallbackTasks: Record<string, string[]> = {
                                                                 'Regular Service': ['Change engine oil and filter', 'Check and top up all fluids', 'Inspect brake pads and rotors', 'Check tire pressure and tread depth', 'Inspect belts and hoses', 'Test battery condition', 'Check all lights and wipers'],
@@ -689,8 +692,12 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                                                         } else {
                                                             alert('AI returned no tasks. Try a more detailed description.');
                                                         }
-                                                    } catch (err) {
-                                                        console.error('AI checklist generation failed:', err);
+                                                    } catch (err: any) {
+                                                        // Set cooldown on quota errors to avoid repeated 429s
+                                                        if (err?.message?.includes('429') || err?.message?.includes('quota') || err?.message?.includes('RESOURCE_EXHAUSTED')) {
+                                                            geminiCooldownUntil = Date.now() + 60000; // skip API for 60s
+                                                        }
+                                                        console.warn('AI checklist: using local fallback —', err?.message?.substring(0, 80) || err);
                                                         // Fallback to local generation on any API error
                                                         const fallbackTasks: Record<string, string[]> = {
                                                             'Regular Service': ['Change engine oil and filter', 'Check and top up all fluids', 'Inspect brake pads and rotors', 'Check tire pressure and tread depth', 'Inspect belts and hoses', 'Test battery condition', 'Check all lights and wipers'],
@@ -1104,7 +1111,7 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                           <div className="grid grid-cols-1 gap-4">
                               <button 
                                 disabled={isSendingNotif}
-                                onClick={() => sendPreferred('Hi {{customer}}, your vehicle check-in is complete. Job #{{id}} has started.')}
+                                onClick={() => sendPreferred('Hi {{customer}}, your vehicle has been checked in and work has started on Job #{{id}}. We will keep you updated on the progress.')}
                                 className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-green-500 hover:bg-green-50 transition-all group disabled:opacity-50"
                               >
                                   <div className="flex items-center gap-4">
@@ -1121,7 +1128,7 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
 
                               <button 
                                 disabled={isSendingNotif}
-                                onClick={() => sendPreferred('Hi {{customer}}, we are waiting for parts for Job #{{id}}. We will update you shortly.')}
+                                onClick={() => sendPreferred('Hi {{customer}}, Job #{{id}} is currently on hold while we wait for parts to arrive. We will notify you once work resumes.')}
                                 className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-orange-500 hover:bg-orange-50 transition-all group disabled:opacity-50"
                               >
                                   <div className="flex items-center gap-4">
@@ -1138,7 +1145,7 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
 
                               <button 
                                 disabled={isSendingNotif}
-                                onClick={() => sendPreferred('Hi {{customer}}, Job #{{id}} is complete! Your vehicle is ready for collection. Total: R' + formData.estimatedCost)}
+                                onClick={() => sendPreferred('Hi {{customer}}, great news! Job #{{id}} is complete and your vehicle is ready for collection. Total: R' + formData.estimatedCost + '. Please collect at your earliest convenience.')}
                                 className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group disabled:opacity-50"
                               >
                                   <div className="flex items-center gap-4">
