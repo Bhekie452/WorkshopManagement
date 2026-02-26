@@ -14,6 +14,20 @@ import {
   Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid, SlidersHorizontal
 } from 'lucide-react';
 
+// 10 Predefined Service Types
+const SERVICE_TYPES = [
+  'General Service',
+  'Major Service',
+  'Oil Change',
+  'Brake Service',
+  'Engine Repair',
+  'Transmission Service',
+  'Electrical Repair',
+  'Tyre Replacement',
+  'Body & Paint',
+  'Diagnostic & Inspection',
+] as const;
+
 // Track Gemini API quota cooldown (skip API calls for 60s after a 429)
 let geminiCooldownUntil = 0;
 
@@ -73,6 +87,8 @@ export const Jobs: React.FC = () => {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<JobStatus | 'ALL'>('ALL');
   const [filterPriority, setFilterPriority] = useState<Priority | 'ALL'>('ALL');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -138,13 +154,21 @@ export const Jobs: React.FC = () => {
     if (e) e.preventDefault();
     if (!formData.customerId || !formData.vehicleId || !formData.description) return;
 
-    // 1. Update Job
+    // 1. Auto-set completedAt when status changes to Completed or Paid
+    const jobData = { ...formData };
+    if ((jobData.status === JobStatus.COMPLETED || jobData.status === JobStatus.PAID) && !jobData.completedAt) {
+      jobData.completedAt = new Date().toISOString();
+    } else if (jobData.status !== JobStatus.COMPLETED && jobData.status !== JobStatus.PAID) {
+      jobData.completedAt = undefined;
+    }
+
+    // 2. Update Job
     if (selectedJob) {
-      store.updateJob({ ...selectedJob, ...formData } as Job);
+      store.updateJob({ ...selectedJob, ...jobData } as Job);
       store.addJobLog(selectedJob.id, 'Updated', 'Job details updated manually');
     } else {
       store.addJob({
-        ...formData,
+        ...jobData,
         createdAt: new Date().toISOString(),
         notes: ''
       } as Job);
@@ -376,20 +400,35 @@ export const Jobs: React.FC = () => {
   };
 
   const filteredJobs = jobs.filter(job => {
-    const matchesSearch = !search ||
-      job.id.toLowerCase().includes(search.toLowerCase()) || 
-      job.serviceType.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = !search || (() => {
+      const q = search.toLowerCase();
+      const customer = customers.find(c => c.id === job.customerId);
+      const vehicle = vehicles.find(v => v.id === job.vehicleId);
+      return (
+        job.id.toLowerCase().includes(q) ||
+        job.serviceType.toLowerCase().includes(q) ||
+        job.description?.toLowerCase().includes(q) ||
+        (customer?.name || '').toLowerCase().includes(q) ||
+        (vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.toLowerCase().includes(q) : false) ||
+        (vehicle?.registration || '').toLowerCase().includes(q) ||
+        (vehicle?.vin || '').toLowerCase().includes(q)
+      );
+    })();
     const matchesFilter = filterStatus === 'ALL' || job.status === filterStatus;
     const matchesPriority = filterPriority === 'ALL' || job.priority === filterPriority;
-    return matchesSearch && matchesFilter && matchesPriority;
+    const matchesDateFrom = !filterDateFrom || job.createdAt >= filterDateFrom;
+    const matchesDateTo = !filterDateTo || job.createdAt <= filterDateTo + 'T23:59:59';
+    return matchesSearch && matchesFilter && matchesPriority && matchesDateFrom && matchesDateTo;
   });
 
-  const activeFilterCount = [filterStatus !== 'ALL', filterPriority !== 'ALL', search !== ''].filter(Boolean).length;
+  const activeFilterCount = [filterStatus !== 'ALL', filterPriority !== 'ALL', search !== '', filterDateFrom !== '', filterDateTo !== ''].filter(Boolean).length;
 
   const clearAllFilters = () => {
     setSearch('');
     setFilterStatus('ALL');
     setFilterPriority('ALL');
+    setFilterDateFrom('');
+    setFilterDateTo('');
     setCurrentPage(1);
   };
 
@@ -495,6 +534,25 @@ export const Jobs: React.FC = () => {
                   {pri === 'ALL' ? 'Priority' : pri}
                 </button>
               ))}
+            </div>
+            {/* Date Range Filter */}
+            <div className="flex items-center gap-1.5 bg-gray-50 rounded-lg border border-gray-200 p-1 px-2">
+              <Calendar size={14} className="text-gray-400 shrink-0" />
+              <input
+                type="date"
+                value={filterDateFrom}
+                onChange={e => { setFilterDateFrom(e.target.value); setCurrentPage(1); }}
+                className={`text-xs bg-transparent outline-none w-[110px] ${filterDateFrom ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}
+                title="From date"
+              />
+              <span className="text-gray-300 text-xs">—</span>
+              <input
+                type="date"
+                value={filterDateTo}
+                onChange={e => { setFilterDateTo(e.target.value); setCurrentPage(1); }}
+                className={`text-xs bg-transparent outline-none w-[110px] ${filterDateTo ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}
+                title="To date"
+              />
             </div>
             {/* Clear Filters */}
             {activeFilterCount > 0 && (
@@ -768,11 +826,14 @@ export const Jobs: React.FC = () => {
                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Service Type</label>
-                                    <input 
-                                        className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none" 
+                                    <select 
+                                        className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none bg-white" 
                                         value={formData.serviceType}
                                         onChange={e => setFormData({...formData, serviceType: e.target.value})}
-                                    />
+                                    >
+                                        <option value="">Select service type...</option>
+                                        {SERVICE_TYPES.map(st => <option key={st} value={st}>{st}</option>)}
+                                    </select>
                                 </div>
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
@@ -784,6 +845,38 @@ export const Jobs: React.FC = () => {
                                         {Object.values(JobStatus).map(s => <option key={s} value={s}>{s}</option>)}
                                     </select>
                                 </div>
+                                {/* Timeline */}
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
+                                    <input 
+                                        type="date"
+                                        className="w-full border border-gray-300 rounded-lg p-2.5 focus:ring-2 focus:ring-blue-500 outline-none"
+                                        value={formData.dueDate ? formData.dueDate.split('T')[0] : ''}
+                                        onChange={e => setFormData({...formData, dueDate: e.target.value ? new Date(e.target.value).toISOString() : ''})}
+                                    />
+                                </div>
+                                {selectedJob && (
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Created</label>
+                                    <input 
+                                        type="text"
+                                        readOnly
+                                        className="w-full border border-gray-200 rounded-lg p-2.5 bg-gray-50 text-gray-500 cursor-not-allowed"
+                                        value={formData.createdAt ? new Date(formData.createdAt).toLocaleDateString() : ''}
+                                    />
+                                  </div>
+                                )}
+                                {selectedJob && formData.completedAt && (
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Completed</label>
+                                    <input 
+                                        type="text"
+                                        readOnly
+                                        className="w-full border border-green-200 rounded-lg p-2.5 bg-green-50 text-green-700 cursor-not-allowed"
+                                        value={new Date(formData.completedAt).toLocaleDateString()}
+                                    />
+                                  </div>
+                                )}
                                 <div className="md:col-span-2">
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Description / Customer Request</label>
                                     <textarea 

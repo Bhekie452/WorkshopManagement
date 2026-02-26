@@ -148,6 +148,7 @@ export interface Job {
   estimatedCost: number;
   createdAt: string;
   dueDate: string;
+  completedAt?: string;  // actual completion timestamp
   
   // Enhanced Arrays
   tasks: JobTask[];
