@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
+import { Pagination, paginate } from '../components/Pagination';
 import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2, Trash2 } from 'lucide-react';
 import { Customer, Attachment, ContactChannel } from '../types';
 
@@ -12,6 +13,8 @@ export const Customers: React.FC = () => {
   const [formData, setFormData] = useState<Partial<Customer>>({ consent: true, preferredContact: 'both', attachments: [] });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const loadData = async () => {
     setIsLoading(true);
@@ -142,7 +145,7 @@ export const Customers: React.FC = () => {
           placeholder="Search by name, email, or phone..."
           className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
         />
       </div>
 
@@ -159,7 +162,7 @@ export const Customers: React.FC = () => {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {filteredCustomers.map((c) => (
+            {paginate<Customer>(filteredCustomers, currentPage, pageSize).map((c) => (
               <tr key={c.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => handleEdit(c)}>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center">
@@ -236,6 +239,13 @@ export const Customers: React.FC = () => {
           </tbody>
         </table>
       </div>
+      <Pagination
+        currentPage={currentPage}
+        totalItems={filteredCustomers.length}
+        pageSize={pageSize}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={setPageSize}
+      />
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">

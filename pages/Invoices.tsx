@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { store } from '../services/store'; // Changed to storeV2
+import { Pagination, paginate } from '../components/Pagination';
 import { PDFService } from '../services/pdf';
 import { emailService } from '../services/emailService';
 import { payfastService } from '../services/payfastService';
@@ -17,6 +18,8 @@ export const Sales: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'Invoice' | 'Quote'>('Invoice');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -402,13 +405,13 @@ export const Sales: React.FC = () => {
       {/* Tabs */}
       <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit">
         <button
-          onClick={() => setActiveTab('Invoice')}
+          onClick={() => { setActiveTab('Invoice'); setCurrentPage(1); }}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'Invoice' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
         >
           Invoices
         </button>
         <button
-          onClick={() => setActiveTab('Quote')}
+          onClick={() => { setActiveTab('Quote'); setCurrentPage(1); }}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-all ${activeTab === 'Quote' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
         >
           Quotations
@@ -472,7 +475,7 @@ export const Sales: React.FC = () => {
               placeholder={`Search ${activeTab} # or Customer...`}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
             />
           </div>
         </div>
@@ -490,7 +493,7 @@ export const Sales: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredDocs.map(doc => {
+              {paginate<Invoice>(filteredDocs, currentPage, pageSize).map(doc => {
                 const customer = customers.find(c => c.id === doc.customerId);
                 const vehicle = vehicles.find(v => v.id === doc.vehicleId);
                 return (
@@ -655,6 +658,13 @@ export const Sales: React.FC = () => {
             </tbody>
           </table>
         </div>
+        <Pagination
+          currentPage={currentPage}
+          totalItems={filteredDocs.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
       {/* === CREATE MODAL === */}

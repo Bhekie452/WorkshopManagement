@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
+import { Pagination, paginate } from '../components/Pagination';
 import { Part } from '../types';
 import { Plus, Search, AlertTriangle, Package, Edit, Trash2 } from 'lucide-react';
 
@@ -9,6 +10,8 @@ export const Inventory: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPart, setEditingPart] = useState<Part | null>(null);
   const [formData, setFormData] = useState<Partial<Part>>({});
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     refreshData();
@@ -109,7 +112,7 @@ export const Inventory: React.FC = () => {
               placeholder="Search by Name, SKU, or Category..." 
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
             />
           </div>
         </div>
@@ -126,7 +129,7 @@ export const Inventory: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredParts.map((part) => (
+              {paginate<Part>(filteredParts, currentPage, pageSize).map((part) => (
                 <tr key={part.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex flex-col">
@@ -181,6 +184,13 @@ export const Inventory: React.FC = () => {
           </table>
         </div>
       </div>
+      <Pagination
+        currentPage={currentPage}
+        totalItems={filteredParts.length}
+        pageSize={pageSize}
+        onPageChange={setCurrentPage}
+        onPageSizeChange={setPageSize}
+      />
 
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">

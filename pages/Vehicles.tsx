@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
+import { Pagination, paginate } from '../components/Pagination';
 import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2, Trash2, Edit, LayoutList, LayoutGrid } from 'lucide-react';
 import { Vehicle, Customer, Job } from '../types';
 
@@ -27,6 +28,8 @@ export const Vehicles: React.FC = () => {
     const [newVehicle, setNewVehicle] = useState<Partial<Vehicle>>({ fuelType: 'Petrol' });
     const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
     const [searchQuery, setSearchQuery] = useState('');
+    const [currentPage, setCurrentPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
 
     const loadData = async () => {
         setIsLoading(true);
@@ -194,7 +197,7 @@ export const Vehicles: React.FC = () => {
                         type="text"
                         placeholder="Search vehicles..."
                         value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
+                        onChange={e => { setSearchQuery(e.target.value); setCurrentPage(1); }}
                         className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
                     />
                 </div>
@@ -232,7 +235,7 @@ export const Vehicles: React.FC = () => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {filteredVehicles.map((v) => {
+                            {paginate<Vehicle>(filteredVehicles, currentPage, pageSize).map((v) => {
                                 const owner = customers.find(c => c.id === v.ownerId);
                                 return (
                                     <tr
@@ -283,12 +286,20 @@ export const Vehicles: React.FC = () => {
                     {filteredVehicles.length === 0 && (
                         <div className="text-center py-8 text-gray-400">No vehicles match your search.</div>
                     )}
+                    <Pagination
+                        currentPage={currentPage}
+                        totalItems={filteredVehicles.length}
+                        pageSize={pageSize}
+                        onPageChange={setCurrentPage}
+                        onPageSizeChange={setPageSize}
+                    />
                 </div>
             )}
 
             {/* GRID VIEW */}
-            {viewMode === 'grid' && <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredVehicles.map((v) => {
+            {viewMode === 'grid' && <div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {paginate<Vehicle>(filteredVehicles, currentPage, pageSize).map((v) => {
                     const owner = customers.find(c => c.id === v.ownerId);
                     return (
                         <div
@@ -342,6 +353,14 @@ export const Vehicles: React.FC = () => {
                         </div>
                     )
                 })}
+            </div>
+            <Pagination
+                currentPage={currentPage}
+                totalItems={filteredVehicles.length}
+                pageSize={pageSize}
+                onPageChange={setCurrentPage}
+                onPageSizeChange={setPageSize}
+            />
             </div>}
 
             {filteredVehicles.length === 0 && viewMode === 'grid' && (

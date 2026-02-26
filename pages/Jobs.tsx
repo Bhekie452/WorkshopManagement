@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
+import { Pagination, paginate } from '../components/Pagination';
 import { emailService } from '../services/emailService';
 import { GoogleGenAI } from '@google/genai';
 import { Job, JobStatus, Priority, Customer, Vehicle, Part, JobTask, JobPartUsage, JobLabor, Attachment } from '../types';
@@ -69,6 +70,8 @@ export const Jobs: React.FC = () => {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<JobStatus | 'ALL'>('ALL');
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
     refreshData();
@@ -400,7 +403,7 @@ export const Jobs: React.FC = () => {
             placeholder="Search Job ID, vehicle, or service type..." 
             className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all"
             value={search}
-            onChange={e => setSearch(e.target.value)}
+            onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
           />
         </div>
         <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0">
@@ -408,7 +411,7 @@ export const Jobs: React.FC = () => {
           {['ALL', JobStatus.PENDING, JobStatus.IN_PROGRESS, JobStatus.AWAITING_PARTS, JobStatus.COMPLETED].map((status) => (
              <button
                 key={status}
-                onClick={() => setFilterStatus(status as any)}
+                onClick={() => { setFilterStatus(status as any); setCurrentPage(1); }}
                 className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-colors border ${
                     filterStatus === status 
                     ? 'bg-slate-800 text-white border-slate-800' 
@@ -457,7 +460,7 @@ export const Jobs: React.FC = () => {
               </thead>
               <tbody className="bg-white divide-y divide-gray-100">
                 {filteredJobs.length > 0 ? (
-                  filteredJobs.map(job => {
+                  paginate<Job>(filteredJobs, currentPage, pageSize).map(job => {
                     const customer = customers.find(c => c.id === job.customerId);
                     const vehicle = vehicles.find(v => v.id === job.vehicleId);
                     const progress = job.tasks && job.tasks.length > 0
@@ -518,12 +521,20 @@ export const Jobs: React.FC = () => {
               </tbody>
             </table>
           </div>
+          <Pagination
+            currentPage={currentPage}
+            totalItems={filteredJobs.length}
+            pageSize={pageSize}
+            onPageChange={setCurrentPage}
+            onPageSizeChange={setPageSize}
+          />
         </div>
       ) : (
         /* GRID / CARD VIEW */
+        <div>
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
           {filteredJobs.length > 0 ? (
-            filteredJobs.map(job => {
+            paginate<Job>(filteredJobs, currentPage, pageSize).map(job => {
               const customer = customers.find(c => c.id === job.customerId);
               const vehicle = vehicles.find(v => v.id === job.vehicleId);
               const progress = job.tasks && job.tasks.length > 0 
@@ -588,6 +599,14 @@ export const Jobs: React.FC = () => {
               <p className="text-gray-500 font-medium">No jobs found matching your criteria.</p>
             </div>
           )}
+        </div>
+        <Pagination
+          currentPage={currentPage}
+          totalItems={filteredJobs.length}
+          pageSize={pageSize}
+          onPageChange={setCurrentPage}
+          onPageSizeChange={setPageSize}
+        />
         </div>
       )}
 
