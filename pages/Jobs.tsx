@@ -8,7 +8,7 @@ import {
   Plus, Filter, Search, Calendar, ChevronRight, X, BrainCircuit, Users, 
   Settings, PenTool, ClipboardList, MessageCircle, Mail, Smartphone,
   Clock, Package, AlertTriangle, CheckCircle2, History, Send, Gauge,
-  Paperclip, Image, FileText, Upload, Loader2, Trash2
+  Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid
 } from 'lucide-react';
 
 // Track Gemini API quota cooldown (skip API calls for 60s after a 429)
@@ -68,6 +68,7 @@ export const Jobs: React.FC = () => {
 
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState<JobStatus | 'ALL'>('ALL');
+  const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
 
   useEffect(() => {
     refreshData();
@@ -417,78 +418,178 @@ export const Jobs: React.FC = () => {
                 {status === 'ALL' ? 'All Jobs' : status}
              </button>
           ))}
+          <div className="border-l border-gray-200 pl-2 ml-1 flex items-center gap-1">
+            <button
+              onClick={() => setViewMode('list')}
+              className={`p-1.5 rounded transition-colors ${viewMode === 'list' ? 'bg-slate-800 text-white' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+              title="List View"
+            >
+              <LayoutList size={18} />
+            </button>
+            <button
+              onClick={() => setViewMode('grid')}
+              className={`p-1.5 rounded transition-colors ${viewMode === 'grid' ? 'bg-slate-800 text-white' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+              title="Grid View"
+            >
+              <LayoutGrid size={18} />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Job List (Grid View) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredJobs.length > 0 ? (
-          filteredJobs.map(job => {
-            const customer = customers.find(c => c.id === job.customerId);
-            const vehicle = vehicles.find(v => v.id === job.vehicleId);
-            const progress = job.tasks && job.tasks.length > 0 
-                ? Math.round((job.tasks.filter(t => t.completed).length / job.tasks.length) * 100) 
-                : 0;
-
-            return (
-              <div 
-                key={job.id} 
-                onClick={() => handleEdit(job)}
-                className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-              >
-                <div>
-                    <div className="flex justify-between items-start mb-3">
-                        <span className="font-mono text-xs font-bold bg-slate-100 text-slate-600 px-2 py-1 rounded">{job.id}</span>
-                        <span className={`text-xs px-2.5 py-1 rounded-full font-bold border ${getStatusColor(job.status)}`}>
+      {/* Job List */}
+      {viewMode === 'list' ? (
+        /* TABLE / LIST VIEW */
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Vehicle</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Progress</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Date</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Amount</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-100">
+                {filteredJobs.length > 0 ? (
+                  filteredJobs.map(job => {
+                    const customer = customers.find(c => c.id === job.customerId);
+                    const vehicle = vehicles.find(v => v.id === job.vehicleId);
+                    const progress = job.tasks && job.tasks.length > 0
+                      ? Math.round((job.tasks.filter(t => t.completed).length / job.tasks.length) * 100)
+                      : 0;
+                    return (
+                      <tr
+                        key={job.id}
+                        onClick={() => handleEdit(job)}
+                        className="hover:bg-blue-50 cursor-pointer transition-colors"
+                      >
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">{job.id.substring(0, 8)}...</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="text-sm font-bold text-gray-900">{job.serviceType}</div>
+                          <div className="text-xs text-gray-500 truncate max-w-[200px]">{job.description}</div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-700 font-medium">{customer?.name || '—'}</td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          {vehicle ? (
+                            <div className="text-sm">
+                              <span className="text-gray-700">{vehicle.make} {vehicle.model}</span>
+                              <span className="text-xs text-gray-400 ml-1">({vehicle.registration})</span>
+                            </div>
+                          ) : <span className="text-gray-400 text-sm">—</span>}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <span className={`text-xs px-2.5 py-1 rounded-full font-bold border ${getStatusColor(job.status)}`}>
                             {job.status}
-                        </span>
-                    </div>
-                    
-                    <h3 className="text-lg font-bold text-gray-900 mb-1">{job.serviceType}</h3>
-                    <p className="text-sm text-gray-500 line-clamp-2 mb-4 h-10">{job.description}</p>
-                    
-                    <div className="flex items-center gap-3 text-sm text-gray-600 mb-2">
-                        <div className="bg-blue-50 p-1.5 rounded text-blue-600"><Users size={16} /></div>
-                        <span className="font-medium truncate">{customer?.name}</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-sm text-gray-600">
-                         <div className="bg-purple-50 p-1.5 rounded text-purple-600"><Settings size={16} /></div>
-                         <span>{vehicle?.make} {vehicle?.model} ({vehicle?.registration})</span>
-                    </div>
-                </div>
-
-                <div className="mt-5 pt-4 border-t border-gray-100">
-                    <div className="flex justify-between items-center text-sm mb-2">
-                        <span className="text-gray-500">Progress</span>
-                        <span className="font-bold text-blue-600">{progress}%</span>
-                    </div>
-                    <div className="w-full bg-gray-100 rounded-full h-2">
-                        <div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
-                    </div>
-                    <div className="mt-4 flex justify-between items-end">
-                        <div className="flex items-center gap-1 text-xs text-gray-400">
-                            <Clock size={12} /> Due {new Date(job.dueDate).toLocaleDateString()}
-                        </div>
-                        <div className="flex items-center gap-3">
-                            {job.attachments && job.attachments.length > 0 && (
-                                <span className="flex items-center gap-1 text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
-                                    <Paperclip size={10} /> {job.attachments.length}
-                                </span>
-                            )}
-                            <span className="font-bold text-gray-900 text-lg">R{job.estimatedCost.toLocaleString()}</span>
-                        </div>
-                    </div>
-                </div>
-              </div>
-            );
-          })
-        ) : (
-          <div className="col-span-full text-center py-20 bg-white rounded-xl border border-dashed border-gray-300">
-            <ClipboardList className="mx-auto h-12 w-12 text-gray-300 mb-4" />
-            <p className="text-gray-500 font-medium">No jobs found matching your criteria.</p>
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-2 min-w-[100px]">
+                            <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+                              <div className="bg-blue-600 h-1.5 rounded-full" style={{ width: `${progress}%` }}></div>
+                            </div>
+                            <span className="text-xs font-bold text-gray-600 w-8 text-right">{progress}%</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(job.dueDate).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-right">
+                          <span className="font-bold text-gray-900">R{job.estimatedCost.toLocaleString()}</span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-16 text-center">
+                      <ClipboardList className="mx-auto h-12 w-12 text-gray-300 mb-4" />
+                      <p className="text-gray-500 font-medium">No jobs found matching your criteria.</p>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        )}
-      </div>
+        </div>
+      ) : (
+        /* GRID / CARD VIEW */
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+          {filteredJobs.length > 0 ? (
+            filteredJobs.map(job => {
+              const customer = customers.find(c => c.id === job.customerId);
+              const vehicle = vehicles.find(v => v.id === job.vehicleId);
+              const progress = job.tasks && job.tasks.length > 0 
+                  ? Math.round((job.tasks.filter(t => t.completed).length / job.tasks.length) * 100) 
+                  : 0;
+
+              return (
+                <div 
+                  key={job.id} 
+                  onClick={() => handleEdit(job)}
+                  className="bg-white rounded-xl p-5 border border-gray-200 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+                >
+                  <div>
+                      <div className="flex justify-between items-start mb-3">
+                          <span className="font-mono text-xs font-bold bg-slate-100 text-slate-600 px-2 py-1 rounded">{job.id}</span>
+                          <span className={`text-xs px-2.5 py-1 rounded-full font-bold border ${getStatusColor(job.status)}`}>
+                              {job.status}
+                          </span>
+                      </div>
+                      
+                      <h3 className="text-lg font-bold text-gray-900 mb-1">{job.serviceType}</h3>
+                      <p className="text-sm text-gray-500 line-clamp-2 mb-4 h-10">{job.description}</p>
+                      
+                      <div className="flex items-center gap-3 text-sm text-gray-600 mb-2">
+                          <div className="bg-blue-50 p-1.5 rounded text-blue-600"><Users size={16} /></div>
+                          <span className="font-medium truncate">{customer?.name}</span>
+                      </div>
+                      <div className="flex items-center gap-3 text-sm text-gray-600">
+                           <div className="bg-purple-50 p-1.5 rounded text-purple-600"><Settings size={16} /></div>
+                           <span>{vehicle?.make} {vehicle?.model} ({vehicle?.registration})</span>
+                      </div>
+                  </div>
+
+                  <div className="mt-5 pt-4 border-t border-gray-100">
+                      <div className="flex justify-between items-center text-sm mb-2">
+                          <span className="text-gray-500">Progress</span>
+                          <span className="font-bold text-blue-600">{progress}%</span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-2">
+                          <div className="bg-blue-600 h-2 rounded-full transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                      </div>
+                      <div className="mt-4 flex justify-between items-end">
+                          <div className="flex items-center gap-1 text-xs text-gray-400">
+                              <Clock size={12} /> Due {new Date(job.dueDate).toLocaleDateString()}
+                          </div>
+                          <div className="flex items-center gap-3">
+                              {job.attachments && job.attachments.length > 0 && (
+                                  <span className="flex items-center gap-1 text-xs text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
+                                      <Paperclip size={10} /> {job.attachments.length}
+                                  </span>
+                              )}
+                              <span className="font-bold text-gray-900 text-lg">R{job.estimatedCost.toLocaleString()}</span>
+                          </div>
+                      </div>
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="col-span-full text-center py-20 bg-white rounded-xl border border-dashed border-gray-300">
+              <ClipboardList className="mx-auto h-12 w-12 text-gray-300 mb-4" />
+              <p className="text-gray-500 font-medium">No jobs found matching your criteria.</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* --- NOTIFICATION TOAST --- */}
       {showNotifToast && (
