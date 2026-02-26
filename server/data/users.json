@@ -1,0 +1,28 @@
+{
+  "users": [
+    {
+      "id": "28188b15-3271-4084-b00c-86ee8b3fb3c6",
+      "name": "Smoke User",
+      "email": "smoke_20260226_121423@example.com",
+      "role": "TECHNICIAN",
+      "avatar": "https://ui-avatars.com/api/?name=Smoke%20User&background=random",
+      "passwordHash": "$2a$12$wGY/ao0TLg9mIsy9w7x1Vub.iaIDNnjE6i0NWuYFUSUw0HSFjnfsu",
+      "sessions": [
+        {
+          "id": "9f55c53b-00a8-4865-8183-b0d10c0b3113",
+          "refreshHash": "$2a$10$ortPEjcpDm6DAYGFfaCTW.oAPxJuoludP..xEy3k06ArnUF3uU0Qi",
+          "createdAt": "2026-02-26T10:14:23.618Z",
+          "expiresAt": "2026-03-05T10:14:23.000Z"
+        },
+        {
+          "id": "660094bc-065b-4e8d-8248-2f4a4153f015",
+          "refreshHash": "$2a$10$0HKhOnEeUqgseOFAWvnLUe5wi/eAdiuKeLASS8c/k0v2N.2DuS1Ua",
+          "createdAt": "2026-02-26T10:14:24.189Z",
+          "expiresAt": "2026-03-05T10:14:24.000Z"
+        }
+      ],
+      "createdAt": "2026-02-26T10:14:23.518Z",
+      "updatedAt": "2026-02-26T10:14:24.189Z"
+    }
+  ]
+}

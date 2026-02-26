@@ -8,8 +8,6 @@ import { companyProfile } from '../services/companyProfile';
 import { emailService } from '../services/emailService';
 import { AuthService } from '../services/auth';
 import { CompanyProfile, User, UserRole } from '../types';
-import { auth } from '../services/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
 import { useAuth } from '../components/AuthContext';
 import { Permission, ROLE_LABELS, ROLE_COLORS, ROLE_DESCRIPTIONS } from '../services/rbac';
 
@@ -32,22 +30,21 @@ export const Settings: React.FC = () => {
 
   useEffect(() => {
     let mounted = true;
-    // Wait for Firebase to restore auth state before loading profile
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = AuthService.onAuthStateChange(async (user) => {
       if (!mounted) return;
       if (user) {
         setIsAuthed(true);
         setAuthChecked(true);
-        if (!user.uid) {
+        if (!user.id) {
           setUserUid(null);
           setIsAuthed(false);
           return;
         }
-        setUserUid(user.uid);
+        setUserUid(user.id);
         try {
           const [p, userData] = await Promise.all([
-            companyProfile.getProfile(user.uid),
-            AuthService.getUserData(user.uid)
+            companyProfile.getProfile(user.id),
+            AuthService.getUserData(user.id)
           ]);
           if (mounted) {
             setProfile(p);

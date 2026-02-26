@@ -1,12 +1,13 @@
 
 import React, { useState } from 'react';
 import { store } from '../services/store';
+import { FirestoreService } from '../services/firestore';
 import { GoogleGenAI } from "@google/genai";
 import { Activity, Cpu, Search, BrainCircuit, Terminal, Save, CheckCircle2 } from 'lucide-react';
 import { DiagnosticRecord } from '../types';
 
 export const Diagnostics: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'symptoms' | 'dtc' | 'history'>('symptoms');
+    const [activeTab, setActiveTab] = useState<'symptoms' | 'dtc' | 'vin' | 'history'>('symptoms');
   const [vehicles] = useState(store.getVehicles());
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   
@@ -19,8 +20,32 @@ export const Diagnostics: React.FC = () => {
   const [dtcCode, setDtcCode] = useState('');
   const [dtcResult, setDtcResult] = useState<{code: string, desc: string, fix: string} | null>(null);
 
-  // History State
-  const [history] = useState<DiagnosticRecord[]>(store.getDiagnostics());
+    // History State
+    const [history] = useState<DiagnosticRecord[]>(store.getDiagnostics());
+
+    // VIN Decoder State
+    const [vin, setVin] = useState('');
+    const [vinResult, setVinResult] = useState<any>(null);
+    const [vinError, setVinError] = useState('');
+
+    // Simple VIN decode logic (for demo; real-world would call an API)
+    const handleVinDecode = () => {
+        setVinError('');
+        setVinResult(null);
+        if (!vin || vin.length < 17) {
+            setVinError('VIN must be 17 characters.');
+            return;
+        }
+        // Demo decode: extract year, manufacturer, country
+        // Real implementation would use a VIN decoding API
+        const yearCode = vin[9];
+        const yearMap: Record<string, string> = { 'A': '2010', 'B': '2011', 'C': '2012', 'D': '2013', 'E': '2014', 'F': '2015', 'G': '2016', 'H': '2017', 'J': '2018', 'K': '2019', 'L': '2020', 'M': '2021', 'N': '2022', 'P': '2023', 'R': '2024', 'S': '2025', 'T': '2026', 'V': '2027', 'W': '2028', 'X': '2029', 'Y': '2030', '1': '2001', '2': '2002', '3': '2003', '4': '2004', '5': '2005', '6': '2006', '7': '2007', '8': '2008', '9': '2009' };
+        const year = yearMap[yearCode] || 'Unknown';
+        const wmi = vin.slice(0, 3);
+        const manufacturer = wmi === '1HG' ? 'Honda' : wmi === 'JHM' ? 'Honda (Japan)' : wmi === 'WVW' ? 'Volkswagen' : 'Unknown';
+        const country = wmi[0] === '1' ? 'USA' : wmi[0] === 'J' ? 'Japan' : wmi[0] === 'W' ? 'Germany' : 'Unknown';
+        setVinResult({ year, manufacturer, country, vin });
+    };
 
   const handleAIAnalysis = async () => {
     if (!symptoms) return;
@@ -55,18 +80,28 @@ export const Diagnostics: React.FC = () => {
     }
   };
 
-  const handleDTCSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    // Mock DB
-    const mockDB: Record<string, any> = {
-        'P0300': { desc: 'Random/Multiple Cylinder Misfire Detected', fix: 'Check plugs, coils, vacuum leaks.' },
-        'P0420': { desc: 'Catalyst System Efficiency Below Threshold', fix: 'Check O2 sensors, catalytic converter.' },
-        'P0171': { desc: 'System Too Lean (Bank 1)', fix: 'Clean MAF sensor, check for vacuum leaks.' }
+    const handleDTCSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        const code = dtcCode.toUpperCase();
+        // Try Firestore first
+        try {
+            const dtc = await FirestoreService.getById<any>('dtcCodes', code);
+            if (dtc) {
+                setDtcResult({ code, desc: dtc.desc, fix: dtc.fix });
+                return;
+            }
+        } catch (err) {
+            // Ignore and fallback to mock
+        }
+        // Fallback to mock DB
+        const mockDB: Record<string, any> = {
+            'P0300': { desc: 'Random/Multiple Cylinder Misfire Detected', fix: 'Check plugs, coils, vacuum leaks.' },
+            'P0420': { desc: 'Catalyst System Efficiency Below Threshold', fix: 'Check O2 sensors, catalytic converter.' },
+            'P0171': { desc: 'System Too Lean (Bank 1)', fix: 'Clean MAF sensor, check for vacuum leaks.' }
+        };
+        const res = mockDB[code] || { desc: 'Code description not found in local DB.', fix: 'Refer to manufacturer manual.' };
+        setDtcResult({ code, ...res });
     };
-    const code = dtcCode.toUpperCase();
-    const res = mockDB[code] || { desc: 'Code description not found in local DB.', fix: 'Refer to manufacturer manual.' };
-    setDtcResult({ code, ...res });
-  };
 
   const saveToHistory = () => {
     if (!selectedVehicleId) return;
@@ -96,25 +131,63 @@ export const Diagnostics: React.FC = () => {
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-gray-200 space-x-6">
-         <button 
-            onClick={() => setActiveTab('symptoms')}
-            className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'symptoms' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-         >
-            <span className="flex items-center gap-2"><BrainCircuit size={16} /> AI Symptom Analyzer</span>
-         </button>
-         <button 
-            onClick={() => setActiveTab('dtc')}
-            className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'dtc' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-         >
-             <span className="flex items-center gap-2"><Terminal size={16} /> DTC Code Lookup</span>
-         </button>
-         <button 
-            onClick={() => setActiveTab('history')}
-            className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'history' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-         >
-             <span className="flex items-center gap-2"><Activity size={16} /> Diagnostic History</span>
-         </button>
+    <div className="flex border-b border-gray-200 space-x-6">
+            <button 
+                onClick={() => setActiveTab('symptoms')}
+                className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'symptoms' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+                <span className="flex items-center gap-2"><BrainCircuit size={16} /> AI Symptom Analyzer</span>
+            </button>
+            <button 
+                onClick={() => setActiveTab('dtc')}
+                className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'dtc' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+                 <span className="flex items-center gap-2"><Terminal size={16} /> DTC Code Lookup</span>
+            </button>
+            <button 
+                onClick={() => setActiveTab('vin')}
+                className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'vin' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+                 <span className="flex items-center gap-2"><Cpu size={16} /> VIN Decoder</span>
+            </button>
+            <button 
+                onClick={() => setActiveTab('history')}
+                className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'history' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+                 <span className="flex items-center gap-2"><Activity size={16} /> Diagnostic History</span>
+            </button>
+                    {/* VIN DECODER TAB */}
+                    {activeTab === 'vin' && (
+                        <div className="p-6 max-w-xl mx-auto">
+                            <h3 className="text-lg font-bold text-gray-900 mb-2">VIN Decoder</h3>
+                            <p className="text-sm text-gray-500 mb-4">Enter a 17-character VIN to decode vehicle information.</p>
+                            <div className="flex gap-4 mb-4">
+                                <input
+                                    type="text"
+                                    className="w-full border rounded-lg p-3 font-mono text-lg uppercase tracking-widest focus:ring-2 focus:ring-blue-500 outline-none"
+                                    placeholder="e.g. 1HGCM82633A123456"
+                                    value={vin}
+                                    maxLength={17}
+                                    onChange={e => setVin(e.target.value.toUpperCase())}
+                                />
+                                <button
+                                    onClick={handleVinDecode}
+                                    className="bg-blue-600 text-white px-6 rounded-lg font-medium"
+                                >
+                                    Decode
+                                </button>
+                            </div>
+                            {vinError && <div className="text-red-600 text-sm mb-2">{vinError}</div>}
+                            {vinResult && (
+                                <div className="bg-blue-50 border border-blue-100 rounded-xl p-6 mt-2">
+                                    <div className="mb-2"><span className="font-bold">VIN:</span> <span className="font-mono">{vinResult.vin}</span></div>
+                                    <div className="mb-2"><span className="font-bold">Year:</span> {vinResult.year}</div>
+                                    <div className="mb-2"><span className="font-bold">Manufacturer:</span> {vinResult.manufacturer}</div>
+                                    <div className="mb-2"><span className="font-bold">Country:</span> {vinResult.country}</div>
+                                </div>
+                            )}
+                        </div>
+                    )}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 min-h-[400px]">
@@ -174,6 +247,16 @@ export const Diagnostics: React.FC = () => {
                 <div className="text-center mb-8">
                     <h3 className="text-lg font-bold text-gray-900">Diagnostic Trouble Code Lookup</h3>
                     <p className="text-sm text-gray-500">Enter OBD-II codes to get descriptions and potential fixes</p>
+                </div>
+                {/* OBD-II Integration Placeholder */}
+                <div className="flex flex-col items-center mb-8">
+                  <button
+                    className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg font-medium flex items-center gap-2 mb-2"
+                    onClick={() => alert('OBD-II scanner integration coming soon!')}
+                  >
+                    <Terminal size={18} /> Connect OBD-II Scanner
+                  </button>
+                  <span className="text-xs text-gray-400">(Future: Connect a Bluetooth/WiFi OBD-II scanner to auto-read codes)</span>
                 </div>
                 <form onSubmit={handleDTCSubmit} className="flex gap-4 mb-8">
                     <div className="relative flex-1">

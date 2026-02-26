@@ -1,3 +1,5 @@
+import { processPendingActions, registerOfflineQueueAutoSync } from '../services/offlineQueue';
+
 export function registerSW() {
     if (!('serviceWorker' in navigator)) return;
 
@@ -10,11 +12,25 @@ export function registerSW() {
     }
 
     window.addEventListener('load', () => {
+        const stopAutoSync = registerOfflineQueueAutoSync();
+
         navigator.serviceWorker.register('/sw.js')
             .then((registration) => {
                 console.log('ServiceWorker registration successful with scope: ', registration.scope);
+
+                navigator.serviceWorker.addEventListener('message', (event) => {
+                    if (event.data?.type === 'PROCESS_OFFLINE_QUEUE') {
+                        processPendingActions().catch(() => undefined);
+                    }
+                });
+
+                processPendingActions().catch(() => undefined);
             }, (err) => {
                 console.log('ServiceWorker registration failed: ', err);
             });
+
+        window.addEventListener('beforeunload', () => {
+            stopAutoSync();
+        }, { once: true });
     });
 }

@@ -4,7 +4,9 @@ import { Pagination, paginate } from '../components/Pagination';
 import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
 import { Part } from '../types';
-import { Plus, Search, AlertTriangle, Package, Edit, Trash2, SlidersHorizontal, X } from 'lucide-react';
+import { Plus, Search, AlertTriangle, Package, Edit, Trash2, SlidersHorizontal, X, History } from 'lucide-react';
+
+import { Job } from '../types';
 
 export const Inventory: React.FC = () => {
   const { can } = useAuth();
@@ -13,6 +15,9 @@ export const Inventory: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPart, setEditingPart] = useState<Part | null>(null);
   const [formData, setFormData] = useState<Partial<Part>>({});
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historyPart, setHistoryPart] = useState<Part | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
@@ -20,10 +25,13 @@ export const Inventory: React.FC = () => {
 
   useEffect(() => {
     refreshData();
+    // Load jobs for usage history
+    setJobs(store.getJobs ? store.getJobs() : []);
   }, []);
 
   const refreshData = () => {
     setParts(store.getParts());
+    if (store.getJobs) setJobs(store.getJobs());
   };
 
   const handleCreate = () => {
@@ -236,6 +244,13 @@ export const Inventory: React.FC = () => {
                     {part.location}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button
+                      onClick={() => { setHistoryPart(part); setIsHistoryOpen(true); }}
+                      className="text-gray-500 hover:text-blue-600 mr-2"
+                      title="View Usage History"
+                    >
+                      <History size={18} />
+                    </button>
                     {can(Permission.MANAGE_INVENTORY) && <>
                     <button onClick={() => handleEdit(part)} className="text-blue-600 hover:text-blue-900 mr-3">
                       <Edit size={18} />
@@ -323,6 +338,55 @@ export const Inventory: React.FC = () => {
                 <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg">Save Part</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Usage History Modal */}
+      {isHistoryOpen && historyPart && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm">
+          <div className="bg-white rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
+              <h3 className="text-lg font-bold text-gray-900">
+                Usage History: {historyPart.name}
+              </h3>
+              <button onClick={() => setIsHistoryOpen(false)} className="text-gray-400 hover:text-gray-600">
+                <span className="text-2xl">&times;</span>
+              </button>
+            </div>
+            <div className="p-6">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Job ID</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Qty</th>
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Used In</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {jobs
+                    .filter(job => (job.partsUsed || []).some(pu => pu.partId === historyPart.id))
+                    .flatMap(job => (job.partsUsed || [])
+                      .filter(pu => pu.partId === historyPart.id)
+                      .map(pu => ({ job, pu })))
+                    .map(({ job, pu }, idx) => (
+                      <tr key={job.id + '-' + idx}>
+                        <td className="px-4 py-2 font-mono text-blue-700">{job.id}</td>
+                        <td className="px-4 py-2 text-sm">{job.createdAt ? new Date(job.createdAt).toLocaleDateString() : '-'}</td>
+                        <td className="px-4 py-2 text-sm">{pu.quantity}</td>
+                        <td className="px-4 py-2 text-sm">{job.description || '-'}</td>
+                      </tr>
+                    ))
+                  }
+                  {/* If no usage */}
+                  {jobs.filter(job => (job.partsUsed || []).some(pu => pu.partId === historyPart.id)).length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-6 text-center text-gray-400">No usage history for this part.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}

@@ -2,6 +2,8 @@
  * Email Service - SendGrid Integration
  * Handles all email notifications for the workshop management system
  */
+import { AuthService } from './auth';
+import { addPendingAction, registerBackgroundSync } from './offlineQueue';
 
 export interface EmailOptions {
   to: string;
@@ -23,6 +25,7 @@ export interface EmailResult {
   success: boolean;
   messageId?: string;
   error?: string;
+  queued?: boolean;
 }
 
 interface CompanyInfo {
@@ -86,11 +89,16 @@ class EmailService {
       return { success: true, messageId: `mock-${Date.now()}` };
     }
 
+    let idToken: string | null = null;
+
     try {
+      idToken = await AuthService.getIdToken();
+
       const response = await fetch(`${this.serverUrl}/api/send`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
         },
         body: JSON.stringify(options),
       });
@@ -103,7 +111,29 @@ class EmailService {
       return { success: true, messageId: result.messageId };
     } catch (error: any) {
       console.error('Failed to send email:', error);
-      return { success: false, error: error.message };
+
+      try {
+        const actionId = await addPendingAction({
+          type: 'email-send',
+          url: `${this.serverUrl}/api/send`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(idToken ? { Authorization: `Bearer ${idToken}` } : {}),
+          },
+          body: JSON.stringify(options),
+        });
+
+        await registerBackgroundSync();
+        return {
+          success: true,
+          queued: true,
+          messageId: `queued-${actionId}`,
+          error: 'Offline or server unavailable. Email queued for automatic retry.',
+        };
+      } catch {
+        return { success: false, error: error.message };
+      }
     }
   }
 

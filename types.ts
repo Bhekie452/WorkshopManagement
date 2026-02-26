@@ -1,3 +1,28 @@
+// EV Battery and Health Log Types
+export interface EvBattery {
+  id: string;
+  vehicleId: string;
+  soh: number; // State of Health (%)
+  soc: number; // State of Charge (%)
+  estimatedRangeKm: number;
+  status: 'Excellent' | 'Good' | 'Fair' | 'Critical';
+  rulMonths: number;
+  confidence: number;
+  nextMaintenanceDate: string;
+  maintenanceReason: string;
+  needsAttention: boolean;
+  cells: Array<{ cell: string; voltage: number }>;
+  createdAt: string;
+}
+
+export interface BatteryHealthLog {
+  id: string;
+  vehicleId: string;
+  soh: number;
+  soc: number;
+  timestamp: string;
+  cells: Array<{ cell: string; voltage: number }>;
+}
 export enum UserRole {
   ADMIN = 'ADMIN',
   MANAGER = 'MANAGER',

@@ -1,4 +1,5 @@
-const CACHE_NAME = 'autoflow-workshop-v2';
+const STATIC_CACHE = 'autoflow-static-v3';
+const API_CACHE = 'autoflow-api-v3';
 const urlsToCache = [
     '/',
     '/index.html',
@@ -6,10 +7,24 @@ const urlsToCache = [
     '/manifest.json'
 ];
 
+const SYNC_TAG = 'wms-sync';
+
+const isAssetRequest = (request, url) => {
+    if (request.destination && ['script', 'style', 'image', 'font'].includes(request.destination)) {
+        return true;
+    }
+    return /\.(js|css|png|jpg|jpeg|svg|gif|webp|woff|woff2)$/i.test(url.pathname);
+};
+
+const isApiRequest = (url) => {
+    return url.pathname.startsWith('/api/') ||
+        (url.hostname === 'localhost' && url.port === '3001');
+};
+
 // Install event - cache static assets
 self.addEventListener('install', (event) => {
     event.waitUntil(
-        caches.open(CACHE_NAME)
+        caches.open(STATIC_CACHE)
             .then((cache) => {
                 console.log('Opened cache');
                 return cache.addAll(urlsToCache);
@@ -24,7 +39,7 @@ self.addEventListener('activate', (event) => {
         caches.keys().then((cacheNames) => {
             return Promise.all(
                 cacheNames.map((cacheName) => {
-                    if (cacheName !== CACHE_NAME) {
+                    if (cacheName !== STATIC_CACHE && cacheName !== API_CACHE) {
                         console.log('Deleting old cache:', cacheName);
                         return caches.delete(cacheName);
                     }
@@ -37,17 +52,19 @@ self.addEventListener('activate', (event) => {
 
 // Fetch event
 self.addEventListener('fetch', (event) => {
-    // Skip cross-origin requests
-    if (!event.request.url.startsWith(self.location.origin)) {
+    const { request } = event;
+    const url = new URL(request.url);
+
+    if (request.method !== 'GET') {
         return;
     }
 
     // For HTML requests (navigation), try Network First, then Cache
-    if (event.request.mode === 'navigate') {
+    if (request.mode === 'navigate') {
         event.respondWith(
-            fetch(event.request)
+            fetch(request)
                 .catch(() => {
-                    return caches.match(event.request)
+                    return caches.match(request)
                         .then((response) => {
                             if (response) return response;
                             return caches.match('/offline.html');
@@ -57,27 +74,100 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // For assets (JS, CSS, Images), try Cache First, then Network
+    // API strategy: Network First, Cache Fallback
+    if (isApiRequest(url)) {
+        event.respondWith(
+            fetch(request)
+                .then((response) => {
+                    if (response && response.ok) {
+                        const responseClone = response.clone();
+                        event.waitUntil(
+                            caches.open(API_CACHE).then((cache) => cache.put(request, responseClone))
+                        );
+                    }
+                    return response;
+                })
+                .catch(async () => {
+                    const cached = await caches.match(request);
+                    if (cached) return cached;
+                    return new Response(JSON.stringify({ error: 'Offline and no cached API response' }), {
+                        status: 503,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                })
+        );
+        return;
+    }
+
+    // Assets strategy: Cache First + Background Update
+    if (isAssetRequest(request, url)) {
+        event.respondWith(
+            caches.match(request).then((cached) => {
+                const networkUpdate = fetch(request)
+                    .then((networkResponse) => {
+                        if (networkResponse && networkResponse.status === 200) {
+                            const cloned = networkResponse.clone();
+                            event.waitUntil(
+                                caches.open(STATIC_CACHE).then((cache) => cache.put(request, cloned))
+                            );
+                        }
+                        return networkResponse;
+                    })
+                    .catch(() => cached);
+
+                return cached || networkUpdate;
+            })
+        );
+        return;
+    }
+
+    // Default strategy: stale-while-revalidate style behavior
     event.respondWith(
-        caches.match(event.request)
+        caches.match(request)
             .then((response) => {
+                const networkPromise = fetch(request).then((networkResponse) => {
+                    if (networkResponse && networkResponse.status === 200) {
+                        const responseToCache = networkResponse.clone();
+                        event.waitUntil(
+                            caches.open(STATIC_CACHE).then((cache) => {
+                                cache.put(request, responseToCache);
+                            })
+                        );
+                    }
+                    return networkResponse;
+                });
+
                 if (response) {
+                    event.waitUntil(networkPromise.catch(() => undefined));
                     return response;
                 }
-                return fetch(event.request).then(
-                    (response) => {
-                        // Don't cache bad responses
-                        if (!response || response.status !== 200 || response.type !== 'basic') {
-                            return response;
-                        }
-                        const responseToCache = response.clone();
-                        caches.open(CACHE_NAME)
-                            .then((cache) => {
-                                cache.put(event.request, responseToCache);
-                            });
-                        return response;
+
+                return networkPromise.catch(() => {
+                    if (request.destination === 'document') {
+                        return caches.match('/offline.html');
                     }
-                );
+                    return new Response('Offline', { status: 503 });
+                });
             })
     );
+});
+
+// Background sync event (asks client pages to process IndexedDB queue)
+self.addEventListener('sync', (event) => {
+    if (event.tag === SYNC_TAG) {
+        event.waitUntil(
+            self.clients.matchAll({ includeUncontrolled: true, type: 'window' })
+                .then((clients) => {
+                    clients.forEach((client) => {
+                        client.postMessage({ type: 'PROCESS_OFFLINE_QUEUE' });
+                    });
+                })
+        );
+    }
+});
+
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'SKIP_WAITING') {
+        self.skipWaiting();
+    }
 });
