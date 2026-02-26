@@ -114,16 +114,27 @@ export const Sales: React.FC = () => {
     const customer = customers.find(c => c.id === doc.customerId);
     if (customer?.email) {
       try {
-        await emailService.sendInvoice(
+        const isQuote = doc.type === 'Quote';
+        const result = await emailService.sendInvoice(
           customer.email,
           customer.name,
           doc.number,
           doc.total,
-          new Date(doc.dueDate).toLocaleDateString()
+          doc.dueDate,
+          isQuote
         );
-      } catch (err) {
+        if (result.success) {
+          alert(`✅ ${doc.type} ${doc.number} sent to ${customer.email}`);
+        } else {
+          console.warn('Email delivery issue:', result.error);
+          alert(`⚠️ ${doc.type} marked as Sent, but email delivery failed: ${result.error || 'Unknown error'}.\nPlease verify your SendGrid sender email is verified.`);
+        }
+      } catch (err: any) {
         console.error('Email send failed:', err);
+        alert(`⚠️ ${doc.type} marked as Sent, but email could not be delivered.\n${err.message || 'Server error'}`);
       }
+    } else {
+      alert(`⚠️ No email on file for ${customer?.name || 'this customer'}. ${doc.type} marked as Sent without email.`);
     }
     store.updateInvoice(doc.id, { status: 'Sent' });
     refreshData();
