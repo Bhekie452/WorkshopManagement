@@ -194,7 +194,7 @@ export const Sales: React.FC = () => {
       issueDate: new Date().toISOString().split('T')[0],
       dueDate: new Date(Date.now() + (type === 'Quote' ? 30 : 7) * 86400000).toISOString().split('T')[0],
       status: 'Draft',
-      items: [{ id: Date.now().toString(), description: 'General Service', quantity: 1, unitPrice: 0, total: 0 }],
+      items: [{ id: Date.now().toString(), description: '', quantity: 1, unitPrice: 0, total: 0 }],
       subtotal: 0,
       taxAmount: 0,
       total: 0,
@@ -746,16 +746,10 @@ export const Sales: React.FC = () => {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
-                    <select
-                      className="w-full border rounded-lg p-2.5 bg-white focus:ring-2 focus:ring-blue-500"
-                      value={formData.status}
-                      onChange={e => setFormData({ ...formData, status: e.target.value as any })}
-                    >
-                      <option value="Draft">Draft</option>
-                      <option value="Sent">Sent</option>
-                      {formData.type === 'Invoice' && <option value="Paid">Paid</option>}
-                      {formData.type === 'Quote' && <option value="Accepted">Accepted</option>}
-                    </select>
+                    <div className="w-full border rounded-lg p-2.5 bg-gray-50 text-gray-600 flex items-center gap-2">
+                      <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-gray-200 text-gray-700">Draft</span>
+                      <span className="text-xs text-gray-400">Auto-assigned on creation</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -791,8 +785,8 @@ export const Sales: React.FC = () => {
                             <input
                               type="text"
                               required
-                              className="w-full border-0 border-b border-transparent focus:border-blue-500 focus:ring-0 bg-transparent p-1"
-                              placeholder="Item description"
+                              className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                              placeholder="e.g. Brake pad replacement"
                               value={item.description}
                               onChange={e => handleItemChange(index, 'description', e.target.value)}
                             />
@@ -802,9 +796,9 @@ export const Sales: React.FC = () => {
                               type="number"
                               min="1"
                               required
-                              className="w-full border-0 border-b border-transparent focus:border-blue-500 focus:ring-0 bg-transparent p-1"
+                              className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm text-center focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
                               value={item.quantity}
-                              onChange={e => handleItemChange(index, 'quantity', parseFloat(e.target.value))}
+                              onChange={e => handleItemChange(index, 'quantity', parseFloat(e.target.value) || 1)}
                             />
                           </td>
                           <td className="px-4 py-2">
@@ -813,9 +807,10 @@ export const Sales: React.FC = () => {
                               min="0"
                               step="0.01"
                               required
-                              className="w-full border-0 border-b border-transparent focus:border-blue-500 focus:ring-0 bg-transparent p-1"
-                              value={item.unitPrice}
-                              onChange={e => handleItemChange(index, 'unitPrice', parseFloat(e.target.value))}
+                              className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white"
+                              placeholder="0.00"
+                              value={item.unitPrice || ''}
+                              onChange={e => handleItemChange(index, 'unitPrice', parseFloat(e.target.value) || 0)}
                             />
                           </td>
                           <td className="px-4 py-2 text-right font-medium text-gray-700">
@@ -840,6 +835,18 @@ export const Sales: React.FC = () => {
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Notes / Remarks (Optional)</label>
+                <textarea
+                  rows={2}
+                  className="w-full border border-gray-300 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                  placeholder="e.g. Payment terms, warranty info, special instructions..."
+                  value={formData.notes || ''}
+                  onChange={e => setFormData({ ...formData, notes: e.target.value })}
+                />
               </div>
 
               {/* Footer Totals */}
