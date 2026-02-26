@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { emailService } from '../services/emailService';
+import { GoogleGenAI } from '@google/genai';
 import { Job, JobStatus, Priority, Customer, Vehicle, Part, JobTask, JobPartUsage, JobLabor, Attachment } from '../types';
 import { 
   Plus, Filter, Search, Calendar, ChevronRight, X, BrainCircuit, Users, 
@@ -609,20 +610,87 @@ export const Jobs: React.FC = () => {
                                             </p>
                                             <button 
                                                 type="button" 
-                                                className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700 transition-colors"
-                                                onClick={() => {
-                                                    // Mock AI generation
-                                                    setFormData({
-                                                        ...formData,
-                                                        tasks: [
-                                                            { id: Date.now().toString(), description: 'Inspect brake pads thickness', completed: false },
-                                                            { id: (Date.now()+1).toString(), description: 'Check brake fluid levels', completed: false },
-                                                            { id: (Date.now()+2).toString(), description: 'Inspect rotor surface', completed: false },
-                                                        ]
-                                                    })
+                                                disabled={isGeneratingChecklist}
+                                                className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                                                onClick={async () => {
+                                                    setIsGeneratingChecklist(true);
+                                                    try {
+                                                        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+                                                        const vehicle = vehicles.find(v => v.id === formData.vehicleId);
+                                                        const vehicleInfo = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model} (${vehicle.fuelType}, ${vehicle.mileage}km)` : 'Unknown vehicle';
+
+                                                        if (!apiKey) {
+                                                            // Fallback: generate context-aware mock tasks based on service type
+                                                            const fallbackTasks: Record<string, string[]> = {
+                                                                'Regular Service': ['Change engine oil and filter', 'Check and top up all fluids', 'Inspect brake pads and rotors', 'Check tire pressure and tread depth', 'Inspect belts and hoses', 'Test battery condition', 'Check all lights and wipers'],
+                                                                'Diagnostics': ['Connect OBD-II scanner and read codes', 'Perform live data analysis', 'Check for pending and stored DTCs', 'Inspect wiring and connectors', 'Test sensor readings against specs', 'Clear codes and road test'],
+                                                                'Tire Rotation': ['Remove all wheels', 'Inspect tire tread depth', 'Rotate tires per pattern', 'Check for uneven wear', 'Torque lug nuts to spec', 'Set tire pressures'],
+                                                                'Brake Service': ['Inspect brake pads thickness', 'Check brake fluid level and condition', 'Inspect rotors for wear/scoring', 'Check brake lines for leaks', 'Test parking brake', 'Road test brakes'],
+                                                                'Software Update': ['Back up current ECU data', 'Connect diagnostic tool', 'Download latest firmware', 'Flash ECU/TCU modules', 'Verify update installation', 'Clear adaptation values', 'Road test and verify'],
+                                                            };
+                                                            const serviceKey = Object.keys(fallbackTasks).find(k => 
+                                                                formData.serviceType?.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(formData.serviceType?.toLowerCase() || '')
+                                                            );
+                                                            const taskList = fallbackTasks[serviceKey || 'Regular Service'] || fallbackTasks['Regular Service'];
+                                                            setFormData({
+                                                                ...formData,
+                                                                tasks: taskList.map((desc, i) => ({
+                                                                    id: (Date.now() + i).toString(),
+                                                                    description: desc,
+                                                                    completed: false
+                                                                }))
+                                                            });
+                                                            setIsGeneratingChecklist(false);
+                                                            return;
+                                                        }
+
+                                                        const ai = new GoogleGenAI({ apiKey });
+                                                        const prompt = `You are an expert automotive master technician. Generate a detailed step-by-step task checklist for this job:
+
+Service Type: ${formData.serviceType || 'General Service'}
+Description: ${formData.description || 'No description provided'}
+Vehicle: ${vehicleInfo}
+
+Return ONLY a JSON array of strings, each being a clear, actionable task step. Example format:
+["Step 1 description", "Step 2 description"]
+
+Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`;
+
+                                                        const response = await ai.models.generateContent({
+                                                            model: 'gemini-2.5-flash',
+                                                            contents: prompt,
+                                                        });
+
+                                                        const text = response.text || '[]';
+                                                        // Extract JSON array from response (handle markdown code blocks)
+                                                        const jsonMatch = text.match(/\[\s*[\s\S]*?\]/);
+                                                        const tasks: string[] = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
+
+                                                        if (tasks.length > 0) {
+                                                            setFormData({
+                                                                ...formData,
+                                                                tasks: tasks.map((desc, i) => ({
+                                                                    id: (Date.now() + i).toString(),
+                                                                    description: desc,
+                                                                    completed: false
+                                                                }))
+                                                            });
+                                                        } else {
+                                                            alert('AI returned no tasks. Try a more detailed description.');
+                                                        }
+                                                    } catch (err) {
+                                                        console.error('AI checklist generation failed:', err);
+                                                        alert('Failed to generate checklist. Check your Gemini API key.');
+                                                    } finally {
+                                                        setIsGeneratingChecklist(false);
+                                                    }
                                                 }}
                                             >
-                                                Generate Smart Checklist
+                                                {isGeneratingChecklist ? (
+                                                    <><Loader2 size={14} className="animate-spin" /> Generating...</>
+                                                ) : (
+                                                    'Generate Smart Checklist'
+                                                )}
                                             </button>
                                         </div>
                                     </div>
