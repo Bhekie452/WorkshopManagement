@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { store } from '../services/store'; // Changed to storeV2
 import { Pagination, paginate } from '../components/Pagination';
+import { useAuth } from '../components/AuthContext';
+import { Permission } from '../services/rbac';
 import { PDFService } from '../services/pdf';
 import { emailService } from '../services/emailService';
 import { payfastService } from '../services/payfastService';
@@ -9,6 +11,7 @@ import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer, Comp
 import { companyProfile as companyProfileService } from '../services/companyProfile';
 
 export const Sales: React.FC = () => {
+  const { can } = useAuth();
   const [salesDocs, setSalesDocs] = useState<Invoice[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -411,7 +414,9 @@ export const Sales: React.FC = () => {
         </div>
         <button
           onClick={() => handleCreate(activeTab)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!can(Permission.MANAGE_INVOICES)}
+          title={!can(Permission.MANAGE_INVOICES) ? 'You do not have permission' : ''}
         >
           <Plus size={20} /> Create {activeTab}
         </button>
@@ -698,13 +703,13 @@ export const Sales: React.FC = () => {
                             )}
 
                             <div className="border-t border-gray-100 my-1"></div>
-                            <button
+                            {can(Permission.MANAGE_INVOICES) && <button
                               onClick={() => handleDelete(doc)}
                               className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-3"
                             >
                               <Trash2 size={16} />
                               Delete
-                            </button>
+                            </button>}
                           </div>
                         )}
                       </div>

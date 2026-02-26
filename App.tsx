@@ -8,6 +8,8 @@ import { AuthService } from './services/auth';
 import { companyProfile as companyProfileService } from './services/companyProfile';
 import { emailService } from './services/emailService';
 import { User } from './types';
+import { AuthProvider, useAuth } from './components/AuthContext';
+import { Permission } from './services/rbac';
 
 // Lazy Load Pages
 const Dashboard = React.lazy(() => import('./pages/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -21,6 +23,13 @@ const Analytics = React.lazy(() => import('./pages/Analytics').then(module => ({
 const Schedule = React.lazy(() => import('./pages/Schedule').then(module => ({ default: module.Schedule })));
 const Sales = React.lazy(() => import('./pages/Invoices').then(module => ({ default: module.Sales })));
 const Settings = React.lazy(() => import('./pages/Settings').then(module => ({ default: module.Settings })));
+
+/** Renders children only if user has permission, otherwise redirects to / */
+const ProtectedRoute: React.FC<{ permission: Permission; children: React.ReactNode }> = ({ permission, children }) => {
+  const { can } = useAuth();
+  if (!can(permission)) return <Navigate to="/" replace />;
+  return <>{children}</>;
+};
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center h-full min-h-[400px]">
@@ -196,28 +205,30 @@ const App: React.FC = () => {
   }
 
   return (
-    <Router>
-      <Layout user={user} onLogout={handleLogout}>
-        <ErrorBoundary>
-          <Suspense fallback={<LoadingSpinner />}>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/jobs" element={<Jobs />} />
-              <Route path="/schedule" element={<Schedule />} />
-              <Route path="/customers" element={<Customers />} />
-              <Route path="/vehicles" element={<Vehicles />} />
-              <Route path="/inventory" element={<Inventory />} />
-              <Route path="/diagnostics" element={<Diagnostics />} />
-              <Route path="/ev-fleet" element={<EVFleet />} />
-              <Route path="/sales" element={<Sales />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Suspense>
-        </ErrorBoundary>
-      </Layout>
-    </Router>
+    <AuthProvider user={user}>
+      <Router>
+        <Layout user={user} onLogout={handleLogout}>
+          <ErrorBoundary>
+            <Suspense fallback={<LoadingSpinner />}>
+              <Routes>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/jobs" element={<ProtectedRoute permission={Permission.VIEW_JOBS}><Jobs /></ProtectedRoute>} />
+                <Route path="/schedule" element={<ProtectedRoute permission={Permission.VIEW_SCHEDULE}><Schedule /></ProtectedRoute>} />
+                <Route path="/customers" element={<ProtectedRoute permission={Permission.VIEW_CUSTOMERS}><Customers /></ProtectedRoute>} />
+                <Route path="/vehicles" element={<ProtectedRoute permission={Permission.VIEW_VEHICLES}><Vehicles /></ProtectedRoute>} />
+                <Route path="/inventory" element={<ProtectedRoute permission={Permission.VIEW_INVENTORY}><Inventory /></ProtectedRoute>} />
+                <Route path="/diagnostics" element={<ProtectedRoute permission={Permission.RUN_DIAGNOSTICS}><Diagnostics /></ProtectedRoute>} />
+                <Route path="/ev-fleet" element={<ProtectedRoute permission={Permission.VIEW_EV_FLEET}><EVFleet /></ProtectedRoute>} />
+                <Route path="/sales" element={<ProtectedRoute permission={Permission.VIEW_INVOICES}><Sales /></ProtectedRoute>} />
+                <Route path="/analytics" element={<ProtectedRoute permission={Permission.VIEW_REPORTS}><Analytics /></ProtectedRoute>} />
+                <Route path="/settings" element={<ProtectedRoute permission={Permission.VIEW_SETTINGS}><Settings /></ProtectedRoute>} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </ErrorBoundary>
+        </Layout>
+      </Router>
+    </AuthProvider>
   );
 };
 

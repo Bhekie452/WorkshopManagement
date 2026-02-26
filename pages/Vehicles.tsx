@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { Pagination, paginate } from '../components/Pagination';
+import { useAuth } from '../components/AuthContext';
+import { Permission } from '../services/rbac';
 import { Plus, Zap, Fuel, Car, Search, History, Gauge, X, Loader2, Trash2, Edit, LayoutList, LayoutGrid, SlidersHorizontal } from 'lucide-react';
 import { Vehicle, Customer, Job } from '../types';
 
 export const Vehicles: React.FC = () => {
+    const { can } = useAuth();
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
     const [customers, setCustomers] = useState<Customer[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -199,7 +202,9 @@ export const Vehicles: React.FC = () => {
                 <h1 className="text-2xl font-bold text-gray-900">Fleet & Vehicles</h1>
                 <button
                     onClick={() => setIsModalOpen(true)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    disabled={!can(Permission.MANAGE_VEHICLES)}
+                    title={!can(Permission.MANAGE_VEHICLES) ? 'You do not have permission' : ''}
                 >
                     <Plus size={18} /> Add Vehicle
                 </button>
@@ -573,20 +578,20 @@ export const Vehicles: React.FC = () => {
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
-                                <button
+                                {can(Permission.MANAGE_VEHICLES) && <button
                                     onClick={() => { setEditData({ ...detailsVehicle }); setIsEditing(!isEditing); }}
                                     className={`p-2 rounded-lg transition-colors ${isEditing ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:text-blue-600 hover:bg-blue-50'}`}
                                     title="Edit Vehicle"
                                 >
                                     <Edit size={18} />
-                                </button>
-                                <button
+                                </button>}
+                                {can(Permission.MANAGE_VEHICLES) && <button
                                     onClick={() => handleDelete(detailsVehicle)}
                                     className="text-gray-400 hover:text-red-600 hover:bg-red-50 p-2 rounded-lg transition-colors"
                                     title="Delete Vehicle"
                                 >
                                     <Trash2 size={18} />
-                                </button>
+                                </button>}
                                 <button
                                     onClick={() => setIsDetailsOpen(false)}
                                     className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-100"

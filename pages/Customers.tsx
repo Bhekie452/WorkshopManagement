@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { Pagination, paginate } from '../components/Pagination';
+import { useAuth } from '../components/AuthContext';
+import { Permission } from '../services/rbac';
 import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2, Trash2, Filter, SlidersHorizontal } from 'lucide-react';
 import { Customer, Attachment, ContactChannel } from '../types';
 
 export const Customers: React.FC = () => {
+  const { can } = useAuth();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -147,7 +150,9 @@ export const Customers: React.FC = () => {
         <h1 className="text-2xl font-bold text-gray-900">Customer Management</h1>
         <button
           onClick={handleCreate}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!can(Permission.MANAGE_CUSTOMERS)}
+          title={!can(Permission.MANAGE_CUSTOMERS) ? 'You do not have permission' : ''}
         >
           <Plus size={18} /> Add Customer
         </button>
@@ -291,13 +296,13 @@ export const Customers: React.FC = () => {
                   )}
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-right">
-                  <button
+                  {can(Permission.MANAGE_CUSTOMERS) && <button
                     onClick={(e) => { e.stopPropagation(); handleDelete(c.id, c.name); }}
                     className="text-gray-300 hover:text-red-500 transition-colors"
                     title="Delete customer"
                   >
                     <Trash2 size={16} />
-                  </button>
+                  </button>}
                 </td>
               </tr>
             ))}

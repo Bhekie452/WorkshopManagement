@@ -10,7 +10,7 @@ import {
     UserCredential
 } from 'firebase/auth';
 import { auth, db } from './firebase';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, getDocs, collection } from 'firebase/firestore';
 import { User, UserRole } from '../types';
 import { Collections } from './firestore';
 
@@ -123,6 +123,28 @@ export class AuthService {
         } catch (error) {
             console.error('Error getting user data:', error);
             return null;
+        }
+    }
+
+    // Get all team members from Firestore
+    static async getAllUsers(): Promise<User[]> {
+        try {
+            const snapshot = await getDocs(collection(db, Collections.USERS));
+            return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as User));
+        } catch (error) {
+            console.error('Error getting all users:', error);
+            return [];
+        }
+    }
+
+    // Update another user's role (admin only)
+    static async updateUserRole(uid: string, role: UserRole): Promise<void> {
+        try {
+            const docRef = doc(db, Collections.USERS, uid);
+            await setDoc(docRef, { role }, { merge: true });
+        } catch (error: any) {
+            console.error('Update role error:', error);
+            throw new Error('Failed to update user role');
         }
     }
 

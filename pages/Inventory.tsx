@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { Pagination, paginate } from '../components/Pagination';
+import { useAuth } from '../components/AuthContext';
+import { Permission } from '../services/rbac';
 import { Part } from '../types';
 import { Plus, Search, AlertTriangle, Package, Edit, Trash2, SlidersHorizontal, X } from 'lucide-react';
 
 export const Inventory: React.FC = () => {
+  const { can } = useAuth();
   const [parts, setParts] = useState<Part[]>([]);
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -84,7 +87,9 @@ export const Inventory: React.FC = () => {
         </div>
         <button 
           onClick={handleCreate}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!can(Permission.MANAGE_INVENTORY)}
+          title={!can(Permission.MANAGE_INVENTORY) ? 'You do not have permission' : ''}
         >
           <Plus size={20} /> Add Part
         </button>
@@ -231,6 +236,7 @@ export const Inventory: React.FC = () => {
                     {part.location}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    {can(Permission.MANAGE_INVENTORY) && <>
                     <button onClick={() => handleEdit(part)} className="text-blue-600 hover:text-blue-900 mr-3">
                       <Edit size={18} />
                     </button>
@@ -247,6 +253,7 @@ export const Inventory: React.FC = () => {
                     >
                       <Trash2 size={18} />
                     </button>
+                    </>}
                   </td>
                 </tr>
               ))}

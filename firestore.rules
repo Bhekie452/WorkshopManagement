@@ -23,7 +23,12 @@ service cloud.firestore {
     
     // Users collection
     match /users/{userId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isOwner(userId);
+      allow update: if isAuthenticated() && (
+        isOwner(userId) || isAdmin()
+      );
+      allow delete: if isAdmin();
     }
     
     // Company Profiles collection

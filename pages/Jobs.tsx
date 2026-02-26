@@ -2,6 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import { store } from '../services/store';
 import { Pagination, paginate } from '../components/Pagination';
+import { useAuth } from '../components/AuthContext';
+import { Permission } from '../services/rbac';
 import { emailService } from '../services/emailService';
 import { GoogleGenAI } from '@google/genai';
 import { Job, JobStatus, Priority, Customer, Vehicle, Part, JobTask, JobPartUsage, JobLabor, Attachment } from '../types';
@@ -16,6 +18,7 @@ import {
 let geminiCooldownUntil = 0;
 
 export const Jobs: React.FC = () => {
+    const { can } = useAuth();
   const [jobs, setJobs] = useState<Job[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
@@ -400,7 +403,9 @@ export const Jobs: React.FC = () => {
         </div>
         <button 
           onClick={handleCreate}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={!can(Permission.CREATE_JOB)}
+          title={!can(Permission.CREATE_JOB) ? 'You do not have permission to create jobs' : ''}
         >
           <Plus size={20} /> New Job Card
         </button>
@@ -699,7 +704,7 @@ export const Jobs: React.FC = () => {
               <div className="flex items-center gap-3">
                   {selectedJob && (
                     <>
-                      <button 
+                      {can(Permission.DELETE_JOB) && <button 
                         onClick={() => {
                           if (confirm(`Delete job "${selectedJob.id}"? This cannot be undone.`)) {
                             store.deleteJob(selectedJob.id);
@@ -711,7 +716,7 @@ export const Jobs: React.FC = () => {
                         title="Delete Job"
                       >
                           <Trash2 size={18} />
-                      </button>
+                      </button>}
                       <button 
                         onClick={() => handleSave()} 
                         className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-medium flex items-center gap-2 transition-colors"

@@ -24,6 +24,9 @@ import {
 } from 'lucide-react';
 import { User } from '../types';
 import { VoiceAssistant } from './VoiceAssistant';
+import { useAuth } from './AuthContext';
+import { Permission } from '../services/rbac';
+import { ROLE_COLORS, ROLE_LABELS } from '../services/rbac';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -51,6 +54,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
+  const { can } = useAuth();
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -118,28 +122,28 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Operations</p>
             <nav>
               <NavItem to="/" icon={LayoutDashboard} label="Dashboard" active={location.pathname === '/'} />
-              <NavItem to="/jobs" icon={Wrench} label="Jobs & Workflow" active={location.pathname === '/jobs'} />
-              <NavItem to="/schedule" icon={CalendarDays} label="Schedule" active={location.pathname === '/schedule'} />
-              <NavItem to="/diagnostics" icon={Activity} label="Diagnostics" active={location.pathname === '/diagnostics'} />
-              <NavItem to="/inventory" icon={Package} label="Inventory" active={location.pathname === '/inventory'} />
+              {can(Permission.VIEW_JOBS) && <NavItem to="/jobs" icon={Wrench} label="Jobs & Workflow" active={location.pathname === '/jobs'} />}
+              {can(Permission.VIEW_SCHEDULE) && <NavItem to="/schedule" icon={CalendarDays} label="Schedule" active={location.pathname === '/schedule'} />}
+              {can(Permission.RUN_DIAGNOSTICS) && <NavItem to="/diagnostics" icon={Activity} label="Diagnostics" active={location.pathname === '/diagnostics'} />}
+              {can(Permission.VIEW_INVENTORY) && <NavItem to="/inventory" icon={Package} label="Inventory" active={location.pathname === '/inventory'} />}
             </nav>
           </div>
 
           <div className="mb-6 px-4">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Management</p>
             <nav>
-              <NavItem to="/customers" icon={Users} label="Customers" active={location.pathname === '/customers'} />
-              <NavItem to="/vehicles" icon={Car} label="Fleet & Vehicles" active={location.pathname === '/vehicles'} />
-              <NavItem to="/ev-fleet" icon={BatteryCharging} label="EV Fleet Manager" active={location.pathname === '/ev-fleet'} />
-              <NavItem to="/sales" icon={FileText} label="Sales & Quotes" active={location.pathname === '/sales'} />
+              {can(Permission.VIEW_CUSTOMERS) && <NavItem to="/customers" icon={Users} label="Customers" active={location.pathname === '/customers'} />}
+              {can(Permission.VIEW_VEHICLES) && <NavItem to="/vehicles" icon={Car} label="Fleet & Vehicles" active={location.pathname === '/vehicles'} />}
+              {can(Permission.VIEW_EV_FLEET) && <NavItem to="/ev-fleet" icon={BatteryCharging} label="EV Fleet Manager" active={location.pathname === '/ev-fleet'} />}
+              {can(Permission.VIEW_INVOICES) && <NavItem to="/sales" icon={FileText} label="Sales & Quotes" active={location.pathname === '/sales'} />}
             </nav>
           </div>
 
           <div className="px-4">
              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">System</p>
              <nav>
-              <NavItem to="/analytics" icon={BarChart3} label="Analytics" active={location.pathname === '/analytics'} />
-              <NavItem to="/settings" icon={Settings} label="Settings" active={location.pathname === '/settings'} />
+              {can(Permission.VIEW_REPORTS) && <NavItem to="/analytics" icon={BarChart3} label="Analytics" active={location.pathname === '/analytics'} />}
+              {can(Permission.VIEW_SETTINGS) && <NavItem to="/settings" icon={Settings} label="Settings" active={location.pathname === '/settings'} />}
              </nav>
           </div>
         </div>
@@ -155,9 +159,14 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
                       <p className="text-sm font-bold text-white truncate">{user?.name}</p>
                       <p className="text-xs text-slate-400 truncate">{user?.email}</p>
                       <div className="mt-2 flex items-center gap-2">
-                         <span className="text-[10px] uppercase font-bold bg-blue-900 text-blue-200 px-2 py-0.5 rounded border border-blue-800 tracking-wider">
-                           {user?.role}
-                         </span>
+                         {user?.role && (() => {
+                           const rc = ROLE_COLORS[user.role];
+                           return (
+                             <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border tracking-wider ${rc.bg} ${rc.text} ${rc.border}`}>
+                               {ROLE_LABELS[user.role]}
+                             </span>
+                           );
+                         })()}
                       </div>
                   </div>
                   

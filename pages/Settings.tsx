@@ -2,26 +2,33 @@ import React, { useState, useEffect } from 'react';
 import { 
   Building2, Save, RotateCcw, MapPin, Phone, Mail, Globe, 
   Clock, DollarSign, FileText, CreditCard, AlertCircle, CheckCircle2, X,
-  UserCircle, Key, Shield
+  UserCircle, Key, Shield, Users, Loader2
 } from 'lucide-react';
 import { companyProfile } from '../services/companyProfile';
 import { emailService } from '../services/emailService';
 import { AuthService } from '../services/auth';
-import { CompanyProfile, User } from '../types';
+import { CompanyProfile, User, UserRole } from '../types';
 import { auth } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { useAuth } from '../components/AuthContext';
+import { Permission, ROLE_LABELS, ROLE_COLORS, ROLE_DESCRIPTIONS } from '../services/rbac';
 
 export const Settings: React.FC = () => {
+  const { can, user: currentUser } = useAuth();
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
   const [userUid, setUserUid] = useState<string | null>(null);
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
   const [userProfile, setUserProfile] = useState<User | null>(null);
   const [saved, setSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState<'personal' | 'company' | 'banking' | 'hours' | 'invoice'>('personal');
+  const [activeTab, setActiveTab] = useState<'personal' | 'company' | 'banking' | 'hours' | 'invoice' | 'team'>('personal');
   const [showResetModal, setShowResetModal] = useState(false);
   const [passwordResetSent, setPasswordResetSent] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
+  // Team management state
+  const [teamMembers, setTeamMembers] = useState<User[]>([]);
+  const [loadingTeam, setLoadingTeam] = useState(false);
+  const [roleChanging, setRoleChanging] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -259,6 +266,25 @@ export const Settings: React.FC = () => {
           <FileText size={18} className="inline mr-2" />
           Invoice
         </button>
+        {can(Permission.MANAGE_TEAM) && (
+          <button
+            onClick={() => {
+              setActiveTab('team');
+              if (teamMembers.length === 0) {
+                setLoadingTeam(true);
+                AuthService.getAllUsers().then(users => { setTeamMembers(users); setLoadingTeam(false); });
+              }
+            }}
+            className={`px-4 py-2 font-medium rounded-t-lg ${
+              activeTab === 'team' 
+                ? 'bg-blue-600 text-white' 
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <Users size={18} className="inline mr-2" />
+            Team
+          </button>
+        )}
       </div>
 
       {/* Personal Details Tab */}
@@ -797,6 +823,124 @@ export const Settings: React.FC = () => {
               </p>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Team Management Tab */}
+      {activeTab === 'team' && can(Permission.MANAGE_TEAM) && (
+        <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="bg-violet-100 p-2 rounded-lg">
+              <Users className="text-violet-600" size={24} />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold text-gray-900">Team & Roles</h2>
+              <p className="text-sm text-gray-500">Manage team members and their roles</p>
+            </div>
+          </div>
+
+          {/* Role Legend */}
+          <div className="bg-gray-50 rounded-lg border border-gray-200 p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Role Permissions</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(Object.values(UserRole) as UserRole[]).map(role => {
+                const rc = ROLE_COLORS[role];
+                return (
+                  <div key={role} className={`flex items-start gap-3 p-3 rounded-lg border ${rc.border} ${rc.bg}`}>
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded ${rc.bg} ${rc.text} border ${rc.border} whitespace-nowrap`}>
+                      {ROLE_LABELS[role]}
+                    </span>
+                    <p className="text-xs text-gray-600 leading-relaxed">{ROLE_DESCRIPTIONS[role]}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Team Members Table */}
+          {loadingTeam ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="animate-spin text-blue-600" size={32} />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Member</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Email</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Current Role</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase">Change Role</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {teamMembers.map(member => {
+                    const rc = ROLE_COLORS[member.role];
+                    const isCurrentUser = member.id === currentUser?.id;
+                    return (
+                      <tr key={member.id} className={`hover:bg-gray-50 ${isCurrentUser ? 'bg-blue-50/30' : ''}`}>
+                        <td className="px-4 py-4">
+                          <div className="flex items-center gap-3">
+                            <img
+                              src={member.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(member.name)}&background=random`}
+                              alt={member.name}
+                              className="w-9 h-9 rounded-full border border-gray-200"
+                            />
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900">
+                                {member.name}
+                                {isCurrentUser && <span className="text-[10px] ml-2 bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold">YOU</span>}
+                              </p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-4 text-sm text-gray-500">{member.email}</td>
+                        <td className="px-4 py-4">
+                          <span className={`inline-flex text-xs font-bold px-2.5 py-1 rounded-full border ${rc.bg} ${rc.text} ${rc.border}`}>
+                            {ROLE_LABELS[member.role]}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4">
+                          {isCurrentUser ? (
+                            <span className="text-xs text-gray-400 italic">Cannot change own role</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <select
+                                value={member.role}
+                                disabled={roleChanging === member.id}
+                                onChange={async (e) => {
+                                  const newRole = e.target.value as UserRole;
+                                  if (newRole === member.role) return;
+                                  if (!confirm(`Change ${member.name}'s role from ${ROLE_LABELS[member.role]} to ${ROLE_LABELS[newRole]}?`)) return;
+                                  setRoleChanging(member.id);
+                                  try {
+                                    await AuthService.updateUserRole(member.id, newRole);
+                                    setTeamMembers(prev => prev.map(m => m.id === member.id ? { ...m, role: newRole } : m));
+                                  } catch (err) {
+                                    alert('Failed to update role');
+                                  }
+                                  setRoleChanging(null);
+                                }}
+                                className="text-sm border border-gray-300 rounded-lg px-3 py-1.5 bg-white focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"
+                              >
+                                {(Object.values(UserRole) as UserRole[]).map(r => (
+                                  <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                                ))}
+                              </select>
+                              {roleChanging === member.id && <Loader2 size={16} className="animate-spin text-blue-600" />}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {teamMembers.length === 0 && !loadingTeam && (
+                <p className="text-center text-gray-400 py-8">No team members found.</p>
+              )}
+            </div>
+          )}
         </div>
       )}
 
