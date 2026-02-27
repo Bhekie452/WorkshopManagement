@@ -33,6 +33,11 @@ export const Settings: React.FC = () => {
   const [signingIn, setSigningIn] = useState(false);
   const [signInError, setSignInError] = useState<string | null>(null);
 
+  // additional email/password sign-in state
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [emailError, setEmailError] = useState<string | null>(null);
+
   const handleSignIn = async () => {
     setSigningIn(true);
     setSignInError(null);
@@ -42,6 +47,16 @@ export const Settings: React.FC = () => {
       setSignInError(err?.message || 'Sign-in failed. Please try again.');
     } finally {
       setSigningIn(false);
+    }
+  };
+
+  const handleEmailSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEmailError(null);
+    try {
+      await AuthService.signIn(email, password);
+    } catch (err: any) {
+      setEmailError(err?.message || 'Sign-in failed');
     }
   };
 
@@ -254,6 +269,38 @@ export const Settings: React.FC = () => {
         <div className="max-w-xl bg-white rounded-xl shadow p-6">
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Sign in to manage settings</h2>
           <p className="text-gray-600 mb-4">You need to be signed in to view or edit company profile settings. Signing in lets you save company details, banking info, operating hours and manage your team.</p>
+
+          <form onSubmit={handleEmailSignIn} className="space-y-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full flex justify-center items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              disabled={email === '' || password === ''}
+            >
+              Sign in with email
+            </button>
+            {emailError && <p className="text-sm text-red-600 mt-2">{emailError}</p>}
+          </form>
+
           <div className="flex items-center gap-3">
             <button
               onClick={handleSignIn}
