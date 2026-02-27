@@ -24,8 +24,44 @@ interface CustomAuthResponse {
 }
 
 export class AuthService {
-    private static readonly AUTH_MODE: AuthMode = import.meta.env.VITE_AUTH_MODE === 'custom' ? 'custom' : 'firebase';
-    private static readonly AUTH_SERVER_URL = import.meta.env.VITE_AUTH_SERVER_URL || import.meta.env.VITE_EMAIL_SERVER_URL || 'http://localhost:3001';
+    // Determine auth mode with runtime safety: prefer Firebase when running
+    // in production (non-localhost) even if build env was set to custom.
+    private static readonly AUTH_MODE: AuthMode = (() => {
+        const envMode = import.meta.env.VITE_AUTH_MODE;
+        if (envMode === 'custom') {
+            try {
+                if (typeof window !== 'undefined') {
+                    const host = window.location.hostname;
+                    // Only allow custom mode when running on localhost
+                    if (host === 'localhost' || host === '127.0.0.1') return 'custom';
+                    return 'firebase';
+                }
+            } catch (_e) {
+                return 'firebase';
+            }
+            return 'custom';
+        }
+        return 'firebase';
+    })();
+
+    // AUTH_SERVER_URL: prefer explicit env, but avoid localhost URLs when running in production
+    private static readonly AUTH_SERVER_URL: string = (() => {
+        const envUrl = import.meta.env.VITE_AUTH_SERVER_URL || import.meta.env.VITE_EMAIL_SERVER_URL || 'http://localhost:3001';
+        try {
+            if (typeof window !== 'undefined') {
+                const host = window.location.hostname;
+                if (host !== 'localhost' && host !== '127.0.0.1') {
+                    // If envUrl points to localhost but we're running in prod, ignore it
+                    if (/localhost|127\.0\.0\.1/.test(envUrl)) {
+                        return '';
+                    }
+                }
+            }
+        } catch (_e) {
+            // fall through
+        }
+        return envUrl;
+    })();
     private static readonly SESSION_KEY = 'customAuthSession';
     private static customAuthListeners = new Set<(user: User | null) => void>();
     private static customTokenListeners = new Set<(token: string | null) => void>();
