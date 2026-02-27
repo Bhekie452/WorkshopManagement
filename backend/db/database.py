@@ -20,17 +20,20 @@ from .models import Base
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/workshop_db"
+    "sqlite:///./workshop.db"
 )
 
 # Create engine
-engine = create_engine(
-    DATABASE_URL,
+_engine_kwargs = dict(
     echo=os.getenv("DEBUG", "false").lower() == "true",
     pool_pre_ping=True,
-    pool_size=5,
-    max_overflow=10
 )
+if not DATABASE_URL.startswith("sqlite"):
+    _engine_kwargs.update(pool_size=5, max_overflow=10)
+else:
+    _engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(DATABASE_URL, **_engine_kwargs)
 
 # Session factory
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

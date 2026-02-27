@@ -20,6 +20,10 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from enum import Enum
 import uuid
+import os
+import hashlib
+import hmac
+import secrets
 from pathlib import Path
 import sys
 
@@ -27,6 +31,38 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ml.ev_rul_model import get_model, EVBatteryRULModel
+
+# Voice router
+from api.voice import router as voice_router
+
+# Database imports (optional — falls back to in-memory if unavailable)
+try:
+    from sqlalchemy.orm import Session
+    from db.database import get_db, engine, SessionLocal
+    from db.models import (
+        Base, Customer as DBCustomer, Vehicle as DBVehicle,
+        Job as DBJob, Part as DBPart, Invoice as DBInvoice, User as DBUser,
+    )
+    # Use SQLite fallback if PostgreSQL not available
+    DB_URL = os.getenv("DATABASE_URL", "")
+    if not DB_URL or "postgresql" not in DB_URL:
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        sqlite_engine = create_engine("sqlite:///./workshop.db", echo=False)
+        Base.metadata.create_all(bind=sqlite_engine)
+        SessionLocal = sessionmaker(bind=sqlite_engine)
+        def get_db():
+            db = SessionLocal()
+            try:
+                yield db
+            finally:
+                db.close()
+    else:
+        Base.metadata.create_all(bind=engine)
+    DB_AVAILABLE = True
+except Exception as e:
+    print(f"Database not available, using in-memory store: {e}")
+    DB_AVAILABLE = False
 
 # =============================================================================
 # App Configuration
@@ -43,7 +79,12 @@ app = FastAPI(
 # CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://workshop-d1832.web.app",
+        "https://workshop-d1832.firebaseapp.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +112,7 @@ class JobStatus(str, Enum):
     AWAITING_PARTS = "Awaiting Parts"
     AWAITING_APPROVAL = "Awaiting Approval"
     COMPLETED = "Completed"
+    INVOICED = "Invoiced"
     PAID = "Paid"
     CANCELLED = "Cancelled"
 
@@ -79,6 +121,7 @@ class Priority(str, Enum):
     LOW = "Low"
     MEDIUM = "Medium"
     HIGH = "High"
+    URGENT = "Urgent"
 
 
 class InvoiceStatus(str, Enum):
@@ -323,16 +366,37 @@ class DashboardStats(BaseModel):
 
 
 # =============================================================================
-# In-Memory Data Store (Replace with PostgreSQL in production)
+# In-Memory Data Store (Fallback when DB not available)
 # =============================================================================
 
-# Simple in-memory stores for demo
 _users: Dict[str, dict] = {}
 _customers: Dict[str, dict] = {}
 _vehicles: Dict[str, dict] = {}
 _jobs: Dict[str, dict] = {}
 _parts: Dict[str, dict] = {}
 _invoices: Dict[str, dict] = {}
+
+# JWT Secret (generate per-instance if not configured)
+JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
+JWT_ALGORITHM = "HS256"
+
+def create_token(user_id: str, email: str, role: str) -> str:
+    """Create a simple HMAC-based token."""
+    payload = f"{user_id}:{email}:{role}:{datetime.utcnow().isoformat()}"
+    sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}:{sig}"
+
+def hash_password(password: str) -> str:
+    """Hash a password with salt."""
+    salt = secrets.token_hex(16)
+    hashed = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000).hex()
+    return f"{salt}:{hashed}"
+
+def verify_password(password: str, stored: str) -> bool:
+    """Verify a password against stored hash."""
+    salt, hashed = stored.split(':')
+    check = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000).hex()
+    return hmac.compare_digest(hashed, check)
 
 
 # =============================================================================
@@ -342,27 +406,42 @@ _invoices: Dict[str, dict] = {}
 @app.post("/api/auth/token", response_model=Token, tags=["Authentication"])
 async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     """Authenticate user and return JWT token."""
-    # In production, verify against database
-    # For demo, accept any credentials
-    return Token(
-        access_token=f"demo_token_{form_data.username}",
-        expires_in=3600,
-    )
+    # Check in-memory store first
+    user = None
+    for u in _users.values():
+        if u.get("email") == form_data.username:
+            user = u
+            break
+    
+    if user and user.get("password_hash"):
+        if not verify_password(form_data.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    elif not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    
+    token = create_token(user["id"], user["email"], user["role"])
+    return Token(access_token=token, expires_in=3600)
 
 
 @app.post("/api/auth/register", response_model=UserResponse, tags=["Authentication"])
 async def register(user: UserCreate):
     """Register a new user."""
+    # Check for duplicate email
+    for u in _users.values():
+        if u.get("email") == user.email:
+            raise HTTPException(status_code=409, detail="Email already registered")
+    
     user_id = str(uuid.uuid4())
     user_data = {
         "id": user_id,
         "email": user.email,
         "name": user.name,
         "role": user.role,
+        "password_hash": hash_password(user.password),
         "created_at": datetime.now(),
     }
     _users[user_id] = user_data
-    return UserResponse(**user_data)
+    return UserResponse(**{k: v for k, v in user_data.items() if k != "password_hash"})
 
 
 @app.get("/api/auth/me", response_model=UserResponse, tags=["Authentication"])
@@ -879,6 +958,13 @@ async def api_info():
             "analytics": ["/api/analytics/dashboard", "/api/analytics/revenue"],
         },
     }
+
+
+# =============================================================================
+# Include Routers
+# =============================================================================
+
+app.include_router(voice_router, prefix="/api")
 
 
 # =============================================================================

@@ -66,7 +66,7 @@ describe('Store Service', () => {
       const customers = store.getCustomers();
       const original = customers[0];
       
-      store.updateCustomer({ ...original, name: 'Updated Name' });
+      store.updateCustomer(original.id, { name: 'Updated Name' });
       
       const updated = store.getCustomers().find(c => c.id === original.id);
       expect(updated?.name).toBe('Updated Name');

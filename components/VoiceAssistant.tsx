@@ -1,5 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
+// Backend voice logging endpoint
+const VOICE_API_URL = import.meta.env.VITE_VOICE_API_URL || '/api/voice/command';
 import { Mic, MicOff, X, Command } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -11,35 +13,49 @@ export const VoiceAssistant: React.FC = () => {
   const navigate = useNavigate();
 
   // Simple simulated voice command processing
+  // Log command to backend
+  const logVoiceCommand = async (command_text: string, response_text: string, success = true, context = '') => {
+    try {
+      await fetch(VOICE_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command_text, response_text, success, context }),
+      });
+    } catch {}
+  };
+
   const processCommand = (cmd: string) => {
     const lowerCmd = cmd.toLowerCase();
     
+    let reply = "I didn't quite catch that. Try saying 'Go to Jobs' or 'Open Inventory'.";
+    let context = '';
     if (lowerCmd.includes('dashboard') || lowerCmd.includes('home')) {
       navigate('/');
-      return 'Navigating to Dashboard.';
-    }
-    if (lowerCmd.includes('jobs') || lowerCmd.includes('job card')) {
+      reply = 'Navigating to Dashboard.';
+      context = 'dashboard';
+    } else if (lowerCmd.includes('jobs') || lowerCmd.includes('job card')) {
       navigate('/jobs');
-      return 'Opening Job Management.';
-    }
-    if (lowerCmd.includes('inventory') || lowerCmd.includes('parts')) {
+      reply = 'Opening Job Management.';
+      context = 'jobs';
+    } else if (lowerCmd.includes('inventory') || lowerCmd.includes('parts')) {
       navigate('/inventory');
-      return 'Opening Inventory.';
-    }
-    if (lowerCmd.includes('calendar') || lowerCmd.includes('schedule')) {
+      reply = 'Opening Inventory.';
+      context = 'inventory';
+    } else if (lowerCmd.includes('calendar') || lowerCmd.includes('schedule')) {
       navigate('/schedule');
-      return 'Opening Calendar.';
-    }
-    if (lowerCmd.includes('invoices') || lowerCmd.includes('billing')) {
-      navigate('/invoices');
-      return 'Opening Invoices.';
-    }
-    if (lowerCmd.includes('customer')) {
+      reply = 'Opening Calendar.';
+      context = 'schedule';
+    } else if (lowerCmd.includes('invoices') || lowerCmd.includes('billing')) {
+      navigate('/sales');
+      reply = 'Opening Invoices.';
+      context = 'invoices';
+    } else if (lowerCmd.includes('customer')) {
       navigate('/customers');
-      return 'Opening Customer Database.';
+      reply = 'Opening Customer Database.';
+      context = 'customers';
     }
-    
-    return "I didn't quite catch that. Try saying 'Go to Jobs' or 'Open Inventory'.";
+    logVoiceCommand(cmd, reply, reply.indexOf('Opening') === 0 || reply.indexOf('Navigating') === 0, context);
+    return reply;
   };
 
   const toggleListening = () => {

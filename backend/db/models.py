@@ -541,3 +541,16 @@ class JobActivityLog(Base):
 
     # Relationships
     job: Mapped["Job"] = relationship("Job", back_populates="activity_log")
+
+
+class VoiceCommand(Base):
+    """Voice command logs."""
+    __tablename__ = "voice_commands"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
+    command_text: Mapped[str] = mapped_column(Text, nullable=False)
+    response_text: Mapped[Optional[str]] = mapped_column(Text)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    context: Mapped[Optional[str]] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -1,11 +1,72 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // TEMPORARY: Allow all access for debugging
-    // TODO: Restore proper security rules after fixing auth
+
+    // Authenticated users can read/write their company data
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    function isSystemAdmin() {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'SYSTEM_ADMIN';
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (request.auth.uid == userId || isAdmin() || isSystemAdmin());
+    }
+
+    // Company profiles
+    match /companyProfiles/{profileId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (request.auth.uid == profileId || isAdmin());
+    }
+
+    // Business data collections — require authentication
+    match /customers/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /vehicles/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /jobs/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /parts/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /appointments/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /invoices/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /diagnostics/{docId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    // Companies collection (system admin only for write)
+    match /companies/{companyId} {
+      allow read: if isAuthenticated();
+      allow write: if isSystemAdmin() || isAdmin();
+    }
+
+    // Deny everything else by default
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

@@ -548,4 +548,3 @@ export const storeV2 = {
 };
 
 // Export both the new async store and keep the old one for gradual migration
-export { storeV2 as store };

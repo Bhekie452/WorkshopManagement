@@ -20,12 +20,12 @@ This migration creates all tables for the workshop management system:
 - mileage_records
 - diagnostic_records
 - job_activity_logs
+- voice_commands
 """
 from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = '001_initial'
@@ -35,13 +35,17 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create enum types
-    op.execute("CREATE TYPE userroleenum AS ENUM ('SYSTEM_ADMIN', 'ADMIN', 'MANAGER', 'TECHNICIAN', 'RECEPTIONIST')")
-    op.execute("CREATE TYPE jobstatusenum AS ENUM ('Pending', 'In Progress', 'Awaiting Parts', 'Awaiting Approval', 'Completed', 'Paid', 'Cancelled')")
-    op.execute("CREATE TYPE priorityenum AS ENUM ('Low', 'Medium', 'High')")
-    op.execute("CREATE TYPE invoicestatusenum AS ENUM ('Draft', 'Sent', 'Paid', 'Overdue', 'Cancelled')")
-    op.execute("CREATE TYPE appointmentstatusenum AS ENUM ('Scheduled', 'Confirmed', 'Completed', 'Cancelled', 'No Show')")
-    op.execute("CREATE TYPE fueltypeenum AS ENUM ('Petrol', 'Diesel', 'Electric', 'Hybrid', 'Other')")
+    bind = op.get_bind()
+    is_pg = bind.dialect.name == 'postgresql'
+
+    if is_pg:
+        # Create enum types (PostgreSQL only)
+        op.execute("CREATE TYPE IF NOT EXISTS userroleenum AS ENUM ('SYSTEM_ADMIN', 'ADMIN', 'MANAGER', 'TECHNICIAN', 'RECEPTIONIST')")
+        op.execute("CREATE TYPE IF NOT EXISTS jobstatusenum AS ENUM ('Pending', 'In Progress', 'Awaiting Parts', 'Awaiting Approval', 'Completed', 'Paid', 'Cancelled')")
+        op.execute("CREATE TYPE IF NOT EXISTS priorityenum AS ENUM ('Low', 'Medium', 'High')")
+        op.execute("CREATE TYPE IF NOT EXISTS invoicestatusenum AS ENUM ('Draft', 'Sent', 'Paid', 'Overdue', 'Cancelled')")
+        op.execute("CREATE TYPE IF NOT EXISTS appointmentstatusenum AS ENUM ('Scheduled', 'Confirmed', 'Completed', 'Cancelled', 'No Show')")
+        op.execute("CREATE TYPE IF NOT EXISTS fueltypeenum AS ENUM ('Petrol', 'Diesel', 'Electric', 'Hybrid', 'Other')")
 
     # Create companies table
     op.create_table('companies',
@@ -69,7 +73,7 @@ def upgrade() -> None:
         sa.Column('email', sa.String(length=200), nullable=False),
         sa.Column('password_hash', sa.String(length=200), nullable=False),
         sa.Column('name', sa.String(length=200), nullable=False),
-        sa.Column('role', sa.Enum('SYSTEM_ADMIN', 'ADMIN', 'MANAGER', 'TECHNICIAN', 'RECEPTIONIST', name='userroleenum'), nullable=False),
+        sa.Column('role', sa.String(length=50), nullable=False),
         sa.Column('avatar_url', sa.String(length=500), nullable=True),
         sa.Column('phone', sa.String(length=50), nullable=True),
         sa.Column('is_active', sa.Boolean(), nullable=False),
@@ -113,7 +117,7 @@ def upgrade() -> None:
         sa.Column('model', sa.String(length=100), nullable=False),
         sa.Column('year', sa.Integer(), nullable=True),
         sa.Column('color', sa.String(length=50), nullable=True),
-        sa.Column('fuel_type', sa.Enum('Petrol', 'Diesel', 'Electric', 'Hybrid', 'Other', name='fueltypeenum'), nullable=False),
+        sa.Column('fuel_type', sa.String(length=50), nullable=False),
         sa.Column('mileage', sa.Integer(), nullable=False),
         sa.Column('engine_number', sa.String(length=100), nullable=True),
         sa.Column('battery_capacity_kwh', sa.Float(), nullable=True),
@@ -137,8 +141,8 @@ def upgrade() -> None:
         sa.Column('service_type', sa.String(length=100), nullable=False),
         sa.Column('description', sa.Text(), nullable=True),
         sa.Column('notes', sa.Text(), nullable=True),
-        sa.Column('status', sa.Enum('Pending', 'In Progress', 'Awaiting Parts', 'Awaiting Approval', 'Completed', 'Paid', 'Cancelled', name='jobstatusenum'), nullable=False),
-        sa.Column('priority', sa.Enum('Low', 'Medium', 'High', name='priorityenum'), nullable=False),
+        sa.Column('status', sa.String(length=50), nullable=False),
+        sa.Column('priority', sa.String(length=50), nullable=False),
         sa.Column('estimated_cost', sa.Float(), nullable=False),
         sa.Column('actual_cost', sa.Float(), nullable=True),
         sa.Column('due_date', sa.DateTime(), nullable=True),
@@ -235,7 +239,7 @@ def upgrade() -> None:
         sa.Column('tax_amount', sa.Float(), nullable=False),
         sa.Column('discount', sa.Float(), nullable=False),
         sa.Column('total', sa.Float(), nullable=False),
-        sa.Column('status', sa.Enum('Draft', 'Sent', 'Paid', 'Overdue', 'Cancelled', name='invoicestatusenum'), nullable=False),
+        sa.Column('status', sa.String(length=50), nullable=False),
         sa.Column('notes', sa.Text(), nullable=True),
         sa.Column('paid_at', sa.DateTime(), nullable=True),
         sa.Column('payment_method', sa.String(length=50), nullable=True),
@@ -273,7 +277,7 @@ def upgrade() -> None:
         sa.Column('appointment_type', sa.String(length=50), nullable=True),
         sa.Column('start_time', sa.DateTime(), nullable=False),
         sa.Column('end_time', sa.DateTime(), nullable=False),
-        sa.Column('status', sa.Enum('Scheduled', 'Confirmed', 'Completed', 'Cancelled', 'No Show', name='appointmentstatusenum'), nullable=False),
+        sa.Column('status', sa.String(length=50), nullable=False),
         sa.Column('recurrence', sa.String(length=20), nullable=False),
         sa.Column('notes', sa.Text(), nullable=True),
         sa.Column('reminder_sent', sa.Boolean(), nullable=False),
@@ -322,9 +326,23 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id')
     )
 
+    # Create voice_commands table
+    op.create_table('voice_commands',
+        sa.Column('id', sa.String(length=36), nullable=False),
+        sa.Column('user_id', sa.String(length=36), nullable=True),
+        sa.Column('command_text', sa.Text(), nullable=False),
+        sa.Column('response_text', sa.Text(), nullable=True),
+        sa.Column('success', sa.Boolean(), nullable=False, server_default='true'),
+        sa.Column('context', sa.String(length=100), nullable=True),
+        sa.Column('created_at', sa.DateTime(), nullable=False),
+        sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+
 
 def downgrade() -> None:
     # Drop tables in reverse order
+    op.drop_table('voice_commands')
     op.drop_table('job_activity_logs')
     op.drop_table('diagnostic_records')
     op.drop_table('mileage_records')
@@ -341,10 +359,12 @@ def downgrade() -> None:
     op.drop_table('users')
     op.drop_table('companies')
     
-    # Drop enum types
-    op.execute("DROP TYPE fueltypeenum")
-    op.execute("DROP TYPE appointmentstatusenum")
-    op.execute("DROP TYPE invoicestatusenum")
-    op.execute("DROP TYPE priorityenum")
-    op.execute("DROP TYPE jobstatusenum")
-    op.execute("DROP TYPE userroleenum")
+    # Drop enum types (PostgreSQL only)
+    bind = op.get_bind()
+    if bind.dialect.name == 'postgresql':
+        op.execute("DROP TYPE IF EXISTS fueltypeenum")
+        op.execute("DROP TYPE IF EXISTS appointmentstatusenum")
+        op.execute("DROP TYPE IF EXISTS invoicestatusenum")
+        op.execute("DROP TYPE IF EXISTS priorityenum")
+        op.execute("DROP TYPE IF EXISTS jobstatusenum")
+        op.execute("DROP TYPE IF EXISTS userroleenum")

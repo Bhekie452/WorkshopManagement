@@ -21,13 +21,14 @@ const PORT = process.env.PORT || 3001;
 // ---------- Auth Config ----------
 const ACCESS_TOKEN_EXPIRES_IN = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
 const REFRESH_TOKEN_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
-const ACCESS_TOKEN_SECRET = process.env.JWT_ACCESS_SECRET || 'dev-access-secret-change-me';
-const REFRESH_TOKEN_SECRET = process.env.JWT_REFRESH_SECRET || 'dev-refresh-secret-change-me';
+const ACCESS_TOKEN_SECRET = process.env.JWT_ACCESS_SECRET || randomUUID() + randomUUID();
+const REFRESH_TOKEN_SECRET = process.env.JWT_REFRESH_SECRET || randomUUID() + randomUUID();
 const REQUIRE_AUTH_FOR_EMAIL = process.env.REQUIRE_AUTH_FOR_EMAIL === 'true';
 
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
 
 const UserRole = {
+  SYSTEM_ADMIN: 'SYSTEM_ADMIN',
   ADMIN: 'ADMIN',
   MANAGER: 'MANAGER',
   TECHNICIAN: 'TECHNICIAN',
@@ -57,6 +58,7 @@ const Permission = {
 };
 
 const ROLE_PERMISSIONS = {
+  [UserRole.SYSTEM_ADMIN]: Object.values(Permission),
   [UserRole.ADMIN]: Object.values(Permission),
   [UserRole.MANAGER]: [
     Permission.VIEW_JOBS, Permission.CREATE_JOB, Permission.EDIT_JOB, Permission.DELETE_JOB,
@@ -90,8 +92,72 @@ const ROLE_PERMISSIONS = {
 };
 
 // ---------- Middleware ----------
-app.use(cors());
-app.use(express.json());
+const ALLOWED_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:5173,https://workshop-d1832.web.app,https://workshop-d1832.firebaseapp.com').split(',');
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(null, true); // Log but allow in dev; tighten in production
+      console.warn(`CORS: request from unknown origin ${origin}`);
+    }
+  },
+  credentials: true,
+}));
+app.use(express.json({ limit: '10mb' }));
+
+// ---------- Rate Limiting ----------
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
+const RATE_LIMIT_MAX = 30; // max requests per window for auth endpoints
+
+const rateLimit = (maxRequests = RATE_LIMIT_MAX) => (req, res, next) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  const key = `${ip}:${req.path}`;
+  const now = Date.now();
+  const entry = rateLimitMap.get(key) || { count: 0, start: now };
+  
+  if (now - entry.start > RATE_LIMIT_WINDOW) {
+    entry.count = 1;
+    entry.start = now;
+  } else {
+    entry.count++;
+  }
+  rateLimitMap.set(key, entry);
+  
+  if (entry.count > maxRequests) {
+    return res.status(429).json({ error: 'Too many requests. Please try again later.' });
+  }
+  next();
+};
+
+// Clean up rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of rateLimitMap.entries()) {
+    if (now - entry.start > RATE_LIMIT_WINDOW * 2) rateLimitMap.delete(key);
+  }
+}, 5 * 60 * 1000);
+
+// ---------- Input Sanitization ----------
+const sanitizeInput = (str) => {
+  if (typeof str !== 'string') return str;
+  return str.replace(/[<>]/g, '').trim();
+};
+
+const sanitizeBody = (req, res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    for (const key of Object.keys(req.body)) {
+      if (typeof req.body[key] === 'string') {
+        req.body[key] = sanitizeInput(req.body[key]);
+      }
+    }
+  }
+  next();
+};
+
+app.use(sanitizeBody);
 
 // ---------- File Store ----------
 const ensureUserStore = () => {
@@ -203,7 +269,7 @@ app.get('/health', (req, res) => {
 });
 
 // ---------- Auth Endpoints ----------
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', rateLimit(10), async (req, res) => {
   try {
     const { name, email, password, role } = req.body || {};
 
@@ -264,7 +330,7 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', rateLimit(15), async (req, res) => {
   try {
     const { email, password } = req.body || {};
 

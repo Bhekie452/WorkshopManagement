@@ -512,6 +512,29 @@ export const store = {
   },
 
   // ==================== UTILITIES ====================
+  getLowStock: () => {
+    const parts = get<Part[]>('parts', MOCK_PARTS);
+    return parts.filter(p => p.quantity <= p.minLevel);
+  },
+
+  getDashboardStats: () => {
+    const jobs = get<Job[]>('jobs', MOCK_JOBS);
+    const customers = get<Customer[]>('customers', MOCK_CUSTOMERS);
+    const parts = get<Part[]>('parts', MOCK_PARTS);
+    const invoices = get<Invoice[]>('invoices', MOCK_INVOICES);
+    return {
+      totalJobs: jobs.length,
+      pendingJobs: jobs.filter(j => j.status === JobStatus.PENDING).length,
+      inProgressJobs: jobs.filter(j => j.status === JobStatus.IN_PROGRESS).length,
+      completedJobs: jobs.filter(j => j.status === JobStatus.COMPLETED || j.status === JobStatus.PAID).length,
+      totalCustomers: customers.length,
+      totalParts: parts.length,
+      lowStockParts: parts.filter(p => p.quantity <= p.minLevel).length,
+      totalInvoices: invoices.length,
+      revenue: invoices.filter(i => i.status === 'Paid').reduce((sum, i) => sum + i.total, 0),
+    };
+  },
+
   reset: () => {
     localStorage.clear();
     window.location.reload();

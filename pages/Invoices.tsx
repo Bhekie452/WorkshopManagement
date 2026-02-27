@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { store } from '../services/store'; // Changed to storeV2
+import { store } from '../services/store';
 import { Pagination, paginate } from '../components/Pagination';
 import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
