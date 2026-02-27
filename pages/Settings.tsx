@@ -45,6 +45,8 @@ export const Settings: React.FC = () => {
   const [signingUp, setSigningUp] = useState(false);
   const [signupError, setSignupError] = useState<string | null>(null);
 
+  // combined error message for card
+  const globalError = signInError || emailError || signupError;
   const handleSignIn = async () => {
     setSigningIn(true);
     setSignInError(null);
@@ -299,6 +301,9 @@ export const Settings: React.FC = () => {
               ? 'Fill in your details below to create a new account.'
               : 'You need to be signed in to view or edit company profile settings. Signing in lets you save company details, banking info, operating hours and manage your team.'}
           </p>
+          {globalError && (
+            <p className="text-sm text-red-600 mb-4">{globalError}</p>
+          )}
 
           {showSignUp ? (
             <form onSubmit={handleSignUp} className="space-y-4 mb-4">
