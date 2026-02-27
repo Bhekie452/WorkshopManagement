@@ -39,7 +39,6 @@ export const Settings: React.FC = () => {
   const [emailError, setEmailError] = useState<string | null>(null);
 
   // sign-up state
-  const [showSignUp, setShowSignUp] = useState(false);
   const [signupName, setSignupName] = useState('');
   const [signupConfirm, setSignupConfirm] = useState('');
   const [signingUp, setSigningUp] = useState(false);
@@ -47,6 +46,7 @@ export const Settings: React.FC = () => {
 
   // combined error message for card
   const globalError = signInError || emailError || signupError;
+
   const handleSignIn = async () => {
     setSigningIn(true);
     setSignInError(null);
@@ -294,146 +294,125 @@ export const Settings: React.FC = () => {
       <div className="p-6">
         <div className="max-w-xl bg-white rounded-xl shadow p-6">
           <h2 className="text-xl font-semibold text-gray-900 mb-2">
-            {showSignUp ? 'Create an account' : 'Sign in to manage settings'}
+            Sign in or create an account
           </h2>
           <p className="text-gray-600 mb-4">
-            {showSignUp
-              ? 'Fill in your details below to create a new account.'
-              : 'You need to be signed in to view or edit company profile settings. Signing in lets you save company details, banking info, operating hours and manage your team.'}
+            You need to be signed in to view or edit company profile settings. Signing in lets you save company details, banking info, operating hours and manage your team. You can also create a new account below.
           </p>
           {globalError && (
             <p className="text-sm text-red-600 mb-4">{globalError}</p>
           )}
 
-          {showSignUp ? (
-            <form onSubmit={handleSignUp} className="space-y-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Name</label>
-                <input
-                  type="text"
-                  value={signupName}
-                  onChange={(e) => setSignupName(e.target.value)}
-                  required
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Confirm password</label>
-                <input
-                  type="password"
-                  value={signupConfirm}
-                  onChange={(e) => setSignupConfirm(e.target.value)}
-                  required
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full flex justify-center items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-                disabled={
-                  email === '' ||
-                  password === '' ||
-                  signupName === '' ||
-                  password !== signupConfirm
-                }
-              >
-                {signingUp ? 'Creating…' : 'Create account'}
-              </button>
-              {signupError && <p className="text-sm text-red-600 mt-2">{signupError}</p>}
-            </form>
-          ) : (
-            <>
-              <form onSubmit={handleEmailSignIn} className="space-y-4 mb-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Email</label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Password</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="w-full flex justify-center items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                  disabled={email === '' || password === ''}
-                >
-                  Sign in with email
-                </button>
-                {emailError && <p className="text-sm text-red-600 mt-2">{emailError}</p>}
-              </form>
+          {/* login form */}
+          <form onSubmit={handleEmailSignIn} className="space-y-4 mb-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full flex justify-center items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              disabled={email === '' || password === ''}
+            >
+              Sign in with email
+            </button>
+            {emailError && <p className="text-sm text-red-600 mt-2">{emailError}</p>}
+          </form>
 
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleSignIn}
-                  disabled={signingIn}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="18" height="18" className="inline-block">
-                    <path fill="#EA4335" d="M24 9.5c3.54 0 6.28 1.54 8.18 2.8l6.04-6.04C34.67 3.03 29.7 1 24 1 14.8 1 6.99 6.9 3.48 14.7l7.91 6.14C13.98 16.2 18.44 9.5 24 9.5z"/>
-                  </svg>
-                  {signingIn ? 'Signing in…' : 'Sign in with Google'}
-                </button>
-                <button
-                  onClick={() => window.location.href = '/'}
-                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                >
-                  Continue as guest
-                </button>
-              </div>
-              {signInError && <p className="text-sm text-red-600 mt-3">{signInError}</p>}
-              <p className="text-xs text-gray-400 mt-4">If you don't have access, contact your workspace administrator to be invited.</p>
-            </>
-          )}
+          {/* signup form */}
+          <hr className="my-6" />
+          <form onSubmit={handleSignUp} className="space-y-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Name</label>
+              <input
+                type="text"
+                value={signupName}
+                onChange={(e) => setSignupName(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Email</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Confirm password</label>
+              <input
+                type="password"
+                value={signupConfirm}
+                onChange={(e) => setSignupConfirm(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <button
+              type="submit"
+              className="w-full flex justify-center items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+              disabled={
+                email === '' ||
+                password === '' ||
+                signupName === '' ||
+                password !== signupConfirm
+              }
+            >
+              {signingUp ? 'Creating…' : 'Create account'}
+            </button>
+            {signupError && <p className="text-sm text-red-600 mt-2">{signupError}</p>}
+          </form>
 
-          <div className="mt-4 text-center">
-            {showSignUp ? (
-              <button
-                onClick={() => setShowSignUp(false)}
-                className="text-sm text-blue-600 hover:underline"
-              >
-                Already have an account? Sign in
-              </button>
-            ) : (
-              <button
-                onClick={() => setShowSignUp(true)}
-                className="text-sm text-blue-600 hover:underline"
-              >
-                Don't have an account? Create one
-              </button>
-            )}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleSignIn}
+              disabled={signingIn}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="18" height="18" className="inline-block">
+                <path fill="#EA4335" d="M24 9.5c3.54 0 6.28 1.54 8.18 2.8l6.04-6.04C34.67 3.03 29.7 1 24 1 14.8 1 6.99 6.9 3.48 14.7l7.91 6.14C13.98 16.2 18.44 9.5 24 9.5z"/>
+              </svg>
+              {signingIn ? 'Signing in…' : 'Sign in with Google'}
+            </button>
+            <button
+              onClick={() => window.location.href = '/'}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+            >
+              Continue as guest
+            </button>
           </div>
+          {signInError && <p className="text-sm text-red-600 mt-3">{signInError}</p>}
+          <p className="text-xs text-gray-400 mt-4">If you don't have access, contact your workspace administrator to be invited.</p>
         </div>
       </div>
     );
