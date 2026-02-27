@@ -93,7 +93,7 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
         {/* left panel with car image and social/signup */}
         <div
           className="hidden lg:flex w-1/2 bg-cover bg-center relative"
-          style={{ backgroundImage: "url('/car-side.jpg')" }}
+          style={{ backgroundImage: "url('/car.avif')" }}
         >
           <div className="absolute inset-0 bg-blue-900/75" />
         </div>
