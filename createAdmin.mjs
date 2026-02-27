@@ -2,8 +2,8 @@
 // Run with: node createAdmin.mjs
 
 import { initializeApp } from 'firebase/app';
-import { getFirestore, doc, setDoc } from 'firebase/firestore';
-import { getAuth, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: "AIzaSyBqRlctfvzQpe9Qy5-hzbW2kWzb2NH-ev4",
@@ -24,37 +24,67 @@ async function createSystemAdmin() {
   const password = 'admin123';
   const name = 'System Administrator';
   
+  let uid = '';
+  
+  console.log(`Starting System Admin creation for ${email}...`);
+
   try {
-    // Create user in Firebase Auth
-    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    const user = userCredential.user;
+    // 1. Try to create user in Firebase Auth
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      uid = userCredential.user.uid;
+      console.log('Firebase Auth account created.');
+      
+      // Update profile with display name
+      await updateProfile(userCredential.user, { displayName: name });
+    } catch (authError) {
+      if (authError.code === 'auth/email-already-in-use') {
+        console.log('Auth account already exists. Attempting to sign in to retrieve UID...');
+        // 2. If user exists, try to sign in to get their UID
+        const signInCredential = await signInWithEmailAndPassword(auth, email, password);
+        uid = signInCredential.user.uid;
+        console.log('Successfully signed in. retrieved UID:', uid);
+      } else {
+        throw authError;
+      }
+    }
     
-    // Update profile with display name
-    await updateProfile(user, { displayName: name });
-    
-    // Create user document in Firestore with SYSTEM_ADMIN role
-    await setDoc(doc(db, 'users', user.uid), {
+    // 3. Create/Update user document in Firestore with SYSTEM_ADMIN role
+    const userRef = doc(db, 'users', uid);
+    const userData = {
       email: email,
       name: name,
       role: 'SYSTEM_ADMIN',
       avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=ef4444&color=fff`,
-      createdAt: new Date().toISOString(),
-      permissions: ['all']
-    });
+      updatedAt: new Date().toISOString(),
+      permissions: ['all'] // Keep for compatibility, though app uses role-based constants
+    };
+
+    // Check if document exists to preserve createdAt if needed
+    const docSnap = await getDoc(userRef);
+    if (!docSnap.exists()) {
+      userData.createdAt = new Date().toISOString();
+    }
+
+    await setDoc(userRef, userData, { merge: true });
     
-    console.log('System Admin created successfully!');
+    console.log('\n--- SUCCESS ---');
+    console.log('System Admin record ensured in Firestore!');
     console.log('Email:', email);
     console.log('Password:', password);
-    console.log('UID:', user.uid);
+    console.log('UID:', uid);
     console.log('Role: SYSTEM_ADMIN');
+    console.log('----------------\n');
+    console.log('You can now log in to the application with these credentials.');
+
   } catch (error) {
-    if (error.code === 'auth/email-already-in-use') {
-      console.log('Admin user already exists. Updating role to SYSTEM_ADMIN...');
-      // If user exists, we need to get their UID and update Firestore
-      console.log('Please sign in to the app with admin@workshop.com and the system will recognize the SYSTEM_ADMIN role once we update the database.');
-    } else {
-      console.error('Error creating admin:', error.message);
+    console.error('\n--- ERROR ---');
+    console.error('Failed to ensure System Admin:', error.message);
+    if (error.code === 'auth/wrong-password') {
+      console.error('The account exists but the password you provided does not match.');
+      console.error('Please update the "password" variable in this script to match the existing account password.');
     }
+    console.error('-------------\n');
   }
   process.exit(0);
 }
