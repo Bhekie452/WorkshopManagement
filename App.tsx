@@ -52,6 +52,12 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
+  // signup state
+  const [signupName, setSignupName] = useState('');
+  const [signupConfirm, setSignupConfirm] = useState('');
+  const [signingUp, setSigningUp] = useState(false);
+  const [signupError, setSignupError] = useState('');
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,9 +108,9 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
         <div className="w-full lg:w-1/2 bg-white p-8 flex items-center justify-center">
           <div className="w-full max-w-md">
             <div className="flex justify-center mb-6">
-              <img src="/wms-logo.png" alt="Hippo Cars" className="h-16 w-auto" />
+              <img src="/wms-logo.png" alt="Workshop Management System" className="h-16 w-auto" />
             </div>
-            <h2 className="text-2xl font-bold text-center text-gray-800 mb-4">Hippo Cars</h2>
+            <h2 className="text-2xl font-bold text-center text-gray-800 mb-4">Workshop Management System</h2>
 
             {error && (
               <div className="bg-red-50 text-red-600 p-3 rounded mb-4 text-sm text-center shadow">{error}</div>
@@ -217,6 +223,23 @@ const App: React.FC = () => {
   const handleLogin = (user: User) => {
     setUser(user);
     // No need to set localStorage manually as onAuthStateChange handles persistence
+  };
+
+  const handleSignup = async () => {
+    setSignupError('');
+    if (password !== signupConfirm) {
+      setSignupError('Passwords do not match');
+      return;
+    }
+    setSigningUp(true);
+    try {
+      const user = await AuthService.signUp(email, password, signupName);
+      handleLogin(user);
+    } catch (err: any) {
+      setSignupError(err.message || 'Registration failed');
+    } finally {
+      setSigningUp(false);
+    }
   };
 
   const handleLogout = async () => {
