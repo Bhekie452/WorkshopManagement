@@ -29,6 +29,59 @@ export const Settings: React.FC = () => {
   const [loadingTeam, setLoadingTeam] = useState(false);
   const [roleChanging, setRoleChanging] = useState<string | null>(null);
 
+  // Sign-in state for unauthenticated UI
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+
+  const handleSignIn = async () => {
+    setSigningIn(true);
+    setSignInError(null);
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      setSignInError(err?.message || 'Sign-in failed. Please try again.');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    const unsubscribe = AuthService.onAuthStateChange(async (user) => {
+      if (!mounted) return;
+      if (user) {
+        setIsAuthed(true);
+        setAuthChecked(true);
+        if (!user.id) {
+          setUserUid(null);
+          setIsAuthed(false);
+          return;
+        }
+        setUserUid(user.id);
+        try {
+          const [p, userData] = await Promise.all([
+            companyProfile.getProfile(user.id),
+            AuthService.getUserData(user.id)
+          ]);
+          if (mounted) {
+            setProfile(p);
+            setUserProfile(userData);
+          }
+        } catch (e) {
+          console.error('Failed to load profile data', e);
+        }
+      } else {
+        setIsAuthed(false);
+        setUserUid(null);
+        setAuthChecked(true);
+      }
+    });
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
+
   // Check if user has a company assigned
   const hasCompany = userProfile?.companyId && userProfile.companyId.length > 0;
   const isSystemAdmin = userProfile?.role === UserRole.SYSTEM_ADMIN;
@@ -69,6 +122,37 @@ export const Settings: React.FC = () => {
       unsubscribe();
     };
   }, []);
+
+  if (!isAuthed) {
+    return (
+      <div className="p-6">
+        <div className="max-w-xl bg-white rounded-xl shadow p-6">
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Sign in to manage settings</h2>
+          <p className="text-gray-600 mb-4">You need to be signed in to view or edit company profile settings. Signing in lets you save company details, banking info, operating hours and manage your team.</p>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleSignIn}
+              disabled={signingIn}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="18" height="18" className="inline-block">
+                <path fill="#EA4335" d="M24 9.5c3.54 0 6.28 1.54 8.18 2.8l6.04-6.04C34.67 3.03 29.7 1 24 1 14.8 1 6.99 6.9 3.48 14.7l7.91 6.14C13.98 16.2 18.44 9.5 24 9.5z"/>
+              </svg>
+              {signingIn ? 'Signing in…' : 'Sign in with Google'}
+            </button>
+            <button
+              onClick={() => window.location.href = '/'}
+              className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+            >
+              Continue as guest
+            </button>
+          </div>
+          {signInError && <p className="text-sm text-red-600 mt-3">{signInError}</p>}
+          <p className="text-xs text-gray-400 mt-4">If you don't have access, contact your workspace administrator to be invited.</p>
+        </div>
+      </div>
+    );
+  }
 
   const handleSave = async () => {
     if (!profile) return;
@@ -134,10 +218,10 @@ export const Settings: React.FC = () => {
   const updateNestedField = (parent: string, field: string, value: any) => {
     setProfile(prev => {
       if (!prev) return prev;
-      // @ts-ignore - dynamic parent
+      const parentObj = prev[parent as keyof CompanyProfile] as Record<string, any>;
       return {
         ...prev,
-        [parent]: { ...prev[parent as keyof CompanyProfile], [field]: value }
+        [parent]: { ...parentObj, [field]: value }
       } as CompanyProfile;
     });
   };
@@ -165,21 +249,6 @@ export const Settings: React.FC = () => {
     );
   }
   if (!isAuthed) {
-    const [signingIn, setSigningIn] = useState(false);
-    const [signInError, setSignInError] = useState<string | null>(null);
-
-    const handleSignIn = async () => {
-      setSigningIn(true);
-      setSignInError(null);
-      try {
-        await signInWithGoogle();
-      } catch (err: any) {
-        setSignInError(err?.message || 'Sign-in failed. Please try again.');
-      } finally {
-        setSigningIn(false);
-      }
-    };
-
     return (
       <div className="p-6">
         <div className="max-w-xl bg-white rounded-xl shadow p-6">
