@@ -126,9 +126,10 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
 
       {/* Sidebar */}
       <aside 
-        className={`fixed inset-y-0 left-0 z-30 w-72 bg-slate-900 text-white transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static lg:inset-0 ${
+        className={`fixed inset-y-0 left-0 z-30 w-72 text-white transform transition-transform duration-200 ease-in-out lg:translate-x-0 lg:static lg:inset-0 ${
           isSidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
+        style={{ backgroundColor: 'rgba(30,58,138,0.75)' }}
       >
         <div className="flex items-center justify-between h-20 px-6 bg-slate-950 border-b border-slate-800">
           <div className="flex items-center justify-center w-full">
