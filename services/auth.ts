@@ -97,6 +97,10 @@ export class AuthService {
     }
 
     private static async requestCustomAuth(path: string, body: Record<string, any>): Promise<CustomAuthResponse> {
+        if (this.AUTH_MODE !== 'custom' || !this.AUTH_SERVER_URL) {
+            throw new Error('Custom auth server is not available in this environment');
+        }
+
         const response = await fetch(`${this.AUTH_SERVER_URL}${path}`, {
             method: 'POST',
             headers: {
@@ -114,6 +118,10 @@ export class AuthService {
     }
 
     private static async customFetch<T = any>(path: string, init: RequestInit = {}): Promise<T> {
+        if (this.AUTH_MODE !== 'custom' || !this.AUTH_SERVER_URL) {
+            throw new Error('Custom API server is not available in this environment');
+        }
+
         const token = await this.getIdToken();
         const response = await fetch(`${this.AUTH_SERVER_URL}${path}`, {
             ...init,
