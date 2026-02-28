@@ -374,6 +374,48 @@ class InvoiceResponse(InvoiceBase):
         from_attributes = True
 
 
+# --- Appointments ---
+class AppointmentBase(BaseModel):
+    title: str
+    appointment_type: str
+    start_time: datetime
+    end_time: datetime
+    customer_id: str
+    vehicle_id: Optional[str] = None
+    assigned_to: Optional[str] = None
+    status: str = "scheduled"
+    recurrence: str = "None"
+    notes: Optional[str] = None
+
+
+class AppointmentCreate(AppointmentBase):
+    pass
+
+
+class AppointmentUpdate(BaseModel):
+    title: Optional[str] = None
+    appointment_type: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    customer_id: Optional[str] = None
+    vehicle_id: Optional[str] = None
+    assigned_to: Optional[str] = None
+    status: Optional[str] = None
+    recurrence: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AppointmentResponse(AppointmentBase):
+    id: str
+    company_id: str
+    created_at: datetime
+    updated_at: datetime
+    reminder_sent: bool
+
+    class Config:
+        from_attributes = True
+
+
 # --- EV Fleet ---
 class EVBatteryData(BaseModel):
     current_soh: float = Field(..., ge=0, le=100, description="State of Health %")
@@ -419,6 +461,8 @@ _vehicles: Dict[str, dict] = {}
 _jobs: Dict[str, dict] = {}
 _parts: Dict[str, dict] = {}
 _invoices: Dict[str, dict] = {}
+_appointments: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
+
 
 # JWT Secret (generate per-instance if not configured)
 JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
@@ -992,6 +1036,83 @@ async def update_invoice_status(invoice_id: str, status: InvoiceStatus, current_
     
     inv["status"] = status
     return InvoiceResponse(**inv)
+
+
+# =============================================================================
+# Appointments Endpoints
+# =============================================================================
+
+@app.get("/api/appointments", response_model=List[AppointmentResponse], tags=["Appointments"])
+async def list_appointments(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    status: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """List all appointments for the user's company with optional filtering."""
+    company_id = current_user.company_id
+    if company_id not in _appointments:
+        return []
+    
+    appointments = [a for a in _appointments[company_id].values()]
+    
+    if status:
+        appointments = [a for a in appointments if a.get("status") == status]
+    
+    return [AppointmentResponse(**a) for a in appointments[skip:skip+limit]]
+
+
+@app.post("/api/appointments", response_model=AppointmentResponse, status_code=201, tags=["Appointments"])
+async def create_appointment(appointment: AppointmentCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Create a new appointment for the user's company."""
+    appointment_id = str(uuid.uuid4())
+    company_id = current_user.company_id
+    appointment_data = {
+        "id": appointment_id,
+        "company_id": company_id,
+        **appointment.model_dump(),
+    }
+    
+    if company_id not in _appointments:
+        _appointments[company_id] = {}
+    
+    _appointments[company_id][appointment_id] = appointment_data
+    return AppointmentResponse(**appointment_data)
+
+
+@app.get("/api/appointments/{appointment_id}", response_model=AppointmentResponse, tags=["Appointments"])
+async def get_appointment(appointment_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a specific appointment by ID if it belongs to the user's company."""
+    company_id = current_user.company_id
+    if company_id not in _appointments or appointment_id not in _appointments[company_id]:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    
+    return AppointmentResponse(**_appointments[company_id][appointment_id])
+
+
+@app.patch("/api/appointments/{appointment_id}", response_model=AppointmentResponse, tags=["Appointments"])
+async def update_appointment(appointment_id: str, update: AppointmentUpdate, current_user: UserResponse = Depends(get_current_user)):
+    """Update an appointment if it belongs to the user's company."""
+    company_id = current_user.company_id
+    if company_id not in _appointments or appointment_id not in _appointments[company_id]:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    
+    appointment_data = _appointments[company_id][appointment_id]
+    update_data = update.model_dump(exclude_unset=True)
+    appointment_data.update(update_data)
+    
+    return AppointmentResponse(**appointment_data)
+
+
+@app.delete("/api/appointments/{appointment_id}", status_code=204, tags=["Appointments"])
+async def delete_appointment(appointment_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete an appointment if it belongs to the user's company."""
+    company_id = current_user.company_id
+    if company_id not in _appointments or appointment_id not in _appointments[company_id]:
+        raise HTTPException(status_code=404, detail="Appointment not found")
+    
+    del _appointments[company_id][appointment_id]
+    return None
 
 
 # =============================================================================

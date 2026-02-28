@@ -472,6 +472,7 @@ class Appointment(Base):
     __tablename__ = "appointments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
     customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), nullable=False)
     vehicle_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("vehicles.id"))
     assigned_to: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
@@ -492,6 +493,7 @@ class Appointment(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
+    company: Mapped["Company"] = relationship("Company")
     customer: Mapped["Customer"] = relationship("Customer", back_populates="appointments")
 
     __table_args__ = (
