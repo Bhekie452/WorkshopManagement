@@ -20,15 +20,18 @@ def upgrade() -> None:
     with op.batch_alter_table('customers') as batch_op:
         batch_op.alter_column('company_id', existing_type=sa.String(length=36), nullable=False)
 
-    # Add company_id to invoices
-    op.add_column('invoices', sa.Column('company_id', sa.String(length=36), nullable=True))
-    op.create_foreign_key('fk_invoices_company', 'invoices', 'companies', ['company_id'], ['id'])
+    # Add company_id to invoices using batch mode
+    with op.batch_alter_table('invoices') as batch_op:
+        batch_op.add_column(sa.Column('company_id', sa.String(length=36), nullable=True))
+    
     # populate existing rows with default empty string if necessary
     op.execute("UPDATE invoices SET company_id = '' WHERE company_id IS NULL")
+    
+    # Now make it non-nullable and add foreign key in batch mode
     with op.batch_alter_table('invoices') as batch_op:
         batch_op.alter_column('company_id', existing_type=sa.String(length=36), nullable=False)
-    # add index for faster filtering
-    op.create_index('idx_invoices_company', 'invoices', ['company_id'], unique=False)
+        batch_op.create_foreign_key('fk_invoices_company', 'companies', ['company_id'], ['id'])
+        batch_op.create_index('idx_invoices_company', ['company_id'], unique=False)
 
 
 def downgrade() -> None:
