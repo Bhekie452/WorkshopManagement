@@ -113,8 +113,10 @@ export class AuthService {
         if (!response.ok) {
             throw new Error(payload?.error || payload?.message || 'Authentication failed');
         }
-
-        return payload as CustomAuthResponse;
+        // Normalize casing for any user objects before returning so callers
+        // may safely rely on camelCase properties (companyId) regardless of
+        // what the server returns (snake_case from FastAPI).
+        return this.normalizePayload(payload) as CustomAuthResponse;
     }
 
     private static async customFetch<T = any>(path: string, init: RequestInit = {}): Promise<T> {
@@ -136,7 +138,40 @@ export class AuthService {
         if (!response.ok) {
             throw new Error(payload?.error || payload?.message || 'Request failed');
         }
-        return payload as T;
+        // also normalize any user records that may be returned by
+        // authentication-related endpoints such as /me or /users
+        return this.normalizePayload(payload) as T;
+    }
+
+    // ----- helpers --------------------------------------------------------
+
+    /**
+     * Convert API user object to our client-side `User` shape.
+     * In particular `company_id` -> `companyId`.
+     */
+    private static normalizeUser(u: any): User {
+        if (!u || typeof u !== 'object') return u;
+        const normalized: any = { ...u };
+        if (u.company_id !== undefined && normalized.companyId === undefined) {
+            normalized.companyId = u.company_id;
+        }
+        return normalized as User;
+    }
+
+    /**
+     * Walk a payload looking for `user` or `users` properties and normalize
+     * them. This keeps both requestCustomAuth and customFetch in sync.
+     */
+    private static normalizePayload<T>(payload: T): T {
+        if (!payload || typeof payload !== 'object') return payload;
+        const p: any = payload as any;
+        if (p.user) {
+            p.user = this.normalizeUser(p.user);
+        }
+        if (Array.isArray(p.users)) {
+            p.users = p.users.map((u: any) => this.normalizeUser(u));
+        }
+        return p as T;
     }
 
     private static async refreshCustomToken(): Promise<string | null> {
@@ -199,10 +234,11 @@ export class AuthService {
         email: string,
         password: string,
         name: string,
-        role: UserRole = UserRole.TECHNICIAN
+        role: UserRole = UserRole.TECHNICIAN,
+        companyId?: string
     ): Promise<User> {
         if (this.AUTH_MODE === 'custom') {
-            const session = await this.requestCustomAuth('/api/auth/signup', { email, password, name, role });
+            const session = await this.requestCustomAuth('/api/auth/signup', { email, password, name, role, companyId });
             this.setCustomSession(session);
             return session.user;
         }

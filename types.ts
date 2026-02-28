@@ -115,6 +115,7 @@ export interface Attachment {
 
 export interface Vehicle {
   id: string;
+  companyId?: string; // owned by which company
   ownerId: string;
   registration: string;
   vin: string;
@@ -131,6 +132,7 @@ export type ContactChannel = 'email' | 'phone' | 'both';
 
 export interface Customer {
   id: string;
+  companyId?: string;
   name: string;
   email: string;
   phone: string;
@@ -200,6 +202,7 @@ export interface JobNotification {
 
 export interface Job {
   id: string;
+  companyId?: string;
   customerId: string;
   vehicleId: string;
   status: JobStatus;
@@ -268,6 +271,7 @@ export interface InvoiceItem {
 
 export interface Invoice {
   id: string;
+  companyId?: string;
   type: 'Invoice' | 'Quote'; // Distinguish between invoices and quotes
   jobId?: string;
   customerId: string;

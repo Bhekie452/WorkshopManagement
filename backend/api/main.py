@@ -143,6 +143,44 @@ class Token(BaseModel):
     expires_in: int
 
 
+# --- Companies ---
+class CompanyBase(BaseModel):
+    name: str
+    email: EmailStr
+    phone: str
+    address: str
+    industry: Optional[str] = None
+    subscription: str = "free"
+    max_users: int = 5
+    is_active: bool = True
+
+
+class CompanyCreate(CompanyBase):
+    pass
+
+
+class CompanyUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    industry: Optional[str] = None
+    subscription: Optional[str] = None
+    max_users: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class CompanyResponse(CompanyBase):
+    id: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# --- Users ---
+
 class UserBase(BaseModel):
     email: EmailStr
     name: str
@@ -151,12 +189,13 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
+    company_id: str  # every user must belong to a company
 
 
 class UserResponse(UserBase):
     id: str
     created_at: datetime
-    company_id: Optional[str] = None
+    company_id: str  # always present
 
     class Config:
         from_attributes = True
@@ -186,6 +225,7 @@ class CustomerUpdate(BaseModel):
 class CustomerResponse(CustomerBase):
     id: str
     created_at: datetime
+    company_id: str
     vehicle_count: int = 0
 
     class Config:
@@ -218,6 +258,7 @@ class VehicleUpdate(BaseModel):
 class VehicleResponse(VehicleBase):
     id: str
     created_at: datetime
+    company_id: str
     owner_name: Optional[str] = None
 
     class Config:
@@ -254,6 +295,7 @@ class JobUpdate(BaseModel):
 
 class JobResponse(JobBase):
     id: str
+    company_id: str
     status: JobStatus
     created_at: datetime
     completed_at: Optional[datetime] = None
@@ -319,6 +361,7 @@ class InvoiceCreate(InvoiceBase):
 
 class InvoiceResponse(InvoiceBase):
     id: str
+    company_id: str
     number: str
     issue_date: datetime
     due_date: datetime
@@ -369,6 +412,7 @@ class DashboardStats(BaseModel):
 # In-Memory Data Store (Fallback when DB not available)
 # =============================================================================
 
+_companies: Dict[str, dict] = {}
 _users: Dict[str, dict] = {}
 _customers: Dict[str, dict] = {}
 _vehicles: Dict[str, dict] = {}
@@ -380,9 +424,10 @@ _invoices: Dict[str, dict] = {}
 JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
 
-def create_token(user_id: str, email: str, role: str) -> str:
+def create_token(user_id: str, email: str, role: str, company_id: str) -> str:
     """Create a simple HMAC-based token."""
-    payload = f"{user_id}:{email}:{role}:{datetime.utcnow().isoformat()}"
+    # token payload: userId:email:role:companyId:timestamp
+    payload = f"{user_id}:{email}:{role}:{company_id}:{datetime.utcnow().isoformat()}"
     sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}:{sig}"
 
@@ -419,7 +464,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     elif not user:
         raise HTTPException(status_code=401, detail="User not found")
     
-    token = create_token(user["id"], user["email"], user["role"])
+    token = create_token(user["id"], user["email"], user["role"], user.get("company_id", ""))
     return Token(access_token=token, expires_in=3600)
 
 
@@ -437,6 +482,7 @@ async def register(user: UserCreate):
         "email": user.email,
         "name": user.name,
         "role": user.role,
+        "company_id": user.company_id,
         "password_hash": hash_password(user.password),
         "created_at": datetime.now(),
     }
@@ -446,17 +492,102 @@ async def register(user: UserCreate):
 
 @app.get("/api/auth/me", response_model=UserResponse, tags=["Authentication"])
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-    """Get current authenticated user."""
+    """Get current authenticated user by decoding our simple token."""
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    # Demo user
+    # token format: userId:email:role:companyId:timestamp:signature
+    parts = token.split(":")
+    if len(parts) < 6:
+        raise HTTPException(status_code=401, detail="Invalid token format")
+    user_id, email, role, company_id = parts[0], parts[1], parts[2], parts[3]
     return UserResponse(
-        id="demo-user",
-        email="demo@workshop.com",
-        name="Demo User",
-        role=UserRole.ADMIN,
+        id=user_id,
+        email=email,
+        name="",  # not available in token
+        role=role,
+        company_id=company_id,
         created_at=datetime.now(),
     )
+
+
+# =============================================================================
+# Companies Endpoints
+# =============================================================================
+
+@app.get("/api/companies", response_model=List[CompanyResponse], tags=["Companies"])
+async def list_companies(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """List all companies for signup/onboarding."""
+    companies = [c for c in _companies.values() if c.get("is_active")]
+    return [CompanyResponse(**c) for c in companies[skip:skip+limit]]
+
+
+@app.post("/api/companies", response_model=CompanyResponse, status_code=201, tags=["Companies"])
+async def create_company(company: CompanyCreate):
+    """Create a new company (public endpoint for registration)."""
+    # Check for duplicate email
+    for c in _companies.values():
+        if c.get("email") == company.email:
+            raise HTTPException(status_code=409, detail="Company email already registered")
+    
+    company_id = str(uuid.uuid4())
+    company_data = {
+        "id": company_id,
+        **company.model_dump(),
+        "created_at": datetime.now(),
+        "is_active": True,
+    }
+    _companies[company_id] = company_data
+    return CompanyResponse(**company_data)
+
+
+@app.get("/api/companies/{company_id}", response_model=CompanyResponse, tags=["Companies"])
+async def get_company(company_id: str):
+    """Get a specific company by ID."""
+    if company_id not in _companies:
+        raise HTTPException(status_code=404, detail="Company not found")
+    company = _companies[company_id]
+    if not company.get("is_active"):
+        raise HTTPException(status_code=404, detail="Company not found")
+    return CompanyResponse(**company)
+
+
+@app.patch("/api/companies/{company_id}", response_model=CompanyResponse, tags=["Companies"])
+async def update_company(
+    company_id: str, 
+    update: CompanyUpdate, 
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Update a company (current user must belong to it)."""
+    if company_id not in _companies:
+        raise HTTPException(status_code=404, detail="Company not found")
+    
+    if current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this company")
+    
+    company = _companies[company_id]
+    update_data = update.model_dump(exclude_unset=True)
+    company.update(update_data)
+    company["updated_at"] = datetime.now()
+    
+    return CompanyResponse(**company)
+
+
+@app.delete("/api/companies/{company_id}", status_code=204, tags=["Companies"])
+async def delete_company(
+    company_id: str, 
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Delete a company (current user must belong to it)."""
+    if company_id not in _companies:
+        raise HTTPException(status_code=404, detail="Company not found")
+    
+    if current_user.company_id != company_id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this company")
+    
+    del _companies[company_id]
 
 
 # =============================================================================
@@ -468,21 +599,25 @@ async def list_customers(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     search: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """List all customers with pagination."""
-    customers = list(_customers.values())
+    # restrict to the user's company
+    company_id = current_user.company_id
+    customers = [c for c in _customers.values() if c.get("company_id") == company_id]
     if search:
         customers = [c for c in customers if search.lower() in c["name"].lower()]
     return [CustomerResponse(**c) for c in customers[skip:skip+limit]]
 
 
 @app.post("/api/customers", response_model=CustomerResponse, status_code=201, tags=["Customers"])
-async def create_customer(customer: CustomerCreate):
-    """Create a new customer."""
+async def create_customer(customer: CustomerCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Create a new customer belonging to the same company as the user."""
     customer_id = str(uuid.uuid4())
     customer_data = {
         "id": customer_id,
         **customer.model_dump(),
+        "company_id": current_user.company_id,
         "created_at": datetime.now(),
         "vehicle_count": 0,
     }
@@ -491,29 +626,31 @@ async def create_customer(customer: CustomerCreate):
 
 
 @app.get("/api/customers/{customer_id}", response_model=CustomerResponse, tags=["Customers"])
-async def get_customer(customer_id: str):
-    """Get a specific customer by ID."""
-    if customer_id not in _customers:
+async def get_customer(customer_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a specific customer by ID if it belongs to user's company."""
+    cust = _customers.get(customer_id)
+    if not cust or cust.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Customer not found")
-    return CustomerResponse(**_customers[customer_id])
+    return CustomerResponse(**cust)
 
 
 @app.patch("/api/customers/{customer_id}", response_model=CustomerResponse, tags=["Customers"])
-async def update_customer(customer_id: str, update: CustomerUpdate):
-    """Update a customer."""
-    if customer_id not in _customers:
+async def update_customer(customer_id: str, update: CustomerUpdate, current_user: UserResponse = Depends(get_current_user)):
+    """Update a customer if it belongs to the user's company."""
+    cust = _customers.get(customer_id)
+    if not cust or cust.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Customer not found")
     
-    customer_data = _customers[customer_id]
     update_data = update.model_dump(exclude_unset=True)
-    customer_data.update(update_data)
-    return CustomerResponse(**customer_data)
+    cust.update(update_data)
+    return CustomerResponse(**cust)
 
 
 @app.delete("/api/customers/{customer_id}", status_code=204, tags=["Customers"])
-async def delete_customer(customer_id: str):
-    """Delete a customer."""
-    if customer_id not in _customers:
+async def delete_customer(customer_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete a customer if it belongs to user's company."""
+    cust = _customers.get(customer_id)
+    if not cust or cust.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Customer not found")
     del _customers[customer_id]
 
@@ -527,51 +664,68 @@ async def list_vehicles(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     owner_id: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user),
 ):
-    """List all vehicles with optional filtering by owner."""
-    vehicles = list(_vehicles.values())
+    """List all vehicles for the user's company with optional filtering by owner."""
+    company_id = current_user.company_id
+    vehicles = [v for v in _vehicles.values()
+                if _customers.get(v.get("owner_id"), {}).get("company_id") == company_id]
     if owner_id:
         vehicles = [v for v in vehicles if v.get("owner_id") == owner_id]
     return [VehicleResponse(**v) for v in vehicles[skip:skip+limit]]
 
 
 @app.post("/api/vehicles", response_model=VehicleResponse, status_code=201, tags=["Vehicles"])
-async def create_vehicle(vehicle: VehicleCreate):
-    """Register a new vehicle."""
+async def create_vehicle(vehicle: VehicleCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Create a new vehicle for a customer in the same company."""
+    cust = _customers.get(vehicle.owner_id)
+    if not cust or cust.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=400, detail="Owner does not belong to your company")
     vehicle_id = str(uuid.uuid4())
     vehicle_data = {
         "id": vehicle_id,
         **vehicle.model_dump(),
         "created_at": datetime.now(),
+        "company_id": current_user.company_id,
     }
     _vehicles[vehicle_id] = vehicle_data
     return VehicleResponse(**vehicle_data)
 
 
 @app.get("/api/vehicles/{vehicle_id}", response_model=VehicleResponse, tags=["Vehicles"])
-async def get_vehicle(vehicle_id: str):
-    """Get a specific vehicle by ID."""
+async def get_vehicle(vehicle_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a specific vehicle by ID (ensuring it belongs to user's company)."""
     if vehicle_id not in _vehicles:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    return VehicleResponse(**_vehicles[vehicle_id])
+    vehicle = _vehicles[vehicle_id]
+    owner = _customers.get(vehicle.get("owner_id"))
+    if not owner or owner.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    return VehicleResponse(**vehicle)
 
 
 @app.patch("/api/vehicles/{vehicle_id}", response_model=VehicleResponse, tags=["Vehicles"])
-async def update_vehicle(vehicle_id: str, update: VehicleUpdate):
-    """Update a vehicle."""
+async def update_vehicle(vehicle_id: str, update: VehicleUpdate, current_user: UserResponse = Depends(get_current_user)):
+    """Update a vehicle (company restricted)."""
     if vehicle_id not in _vehicles:
         raise HTTPException(status_code=404, detail="Vehicle not found")
-    
-    vehicle_data = _vehicles[vehicle_id]
+    vehicle = _vehicles[vehicle_id]
+    owner = _customers.get(vehicle.get("owner_id"))
+    if not owner or owner.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
     update_data = update.model_dump(exclude_unset=True)
-    vehicle_data.update(update_data)
-    return VehicleResponse(**vehicle_data)
+    vehicle.update(update_data)
+    return VehicleResponse(**vehicle)
 
 
 @app.delete("/api/vehicles/{vehicle_id}", status_code=204, tags=["Vehicles"])
-async def delete_vehicle(vehicle_id: str):
-    """Delete a vehicle."""
+async def delete_vehicle(vehicle_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete a vehicle (company restricted)."""
     if vehicle_id not in _vehicles:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    vehicle = _vehicles[vehicle_id]
+    owner = _customers.get(vehicle.get("owner_id"))
+    if not owner or owner.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     del _vehicles[vehicle_id]
 
@@ -586,9 +740,12 @@ async def list_jobs(
     limit: int = Query(50, ge=1, le=100),
     status: Optional[JobStatus] = None,
     priority: Optional[Priority] = None,
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """List all jobs with optional filtering."""
     jobs = list(_jobs.values())
+    # restrict to current user's company
+    jobs = [j for j in jobs if j.get("company_id") == current_user.company_id]
     if status:
         jobs = [j for j in jobs if j.get("status") == status]
     if priority:
@@ -597,12 +754,18 @@ async def list_jobs(
 
 
 @app.post("/api/jobs", response_model=JobResponse, status_code=201, tags=["Jobs"])
-async def create_job(job: JobCreate):
+async def create_job(job: JobCreate, current_user: UserResponse = Depends(get_current_user)):
     """Create a new job/work order."""
+    # ensure customer belongs to company
+    cust = _customers.get(job.customer_id)
+    if not cust or cust.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=400, detail="Customer must belong to your company")
+
     job_id = f"JOB-{str(uuid.uuid4())[:8].upper()}"
     job_data = {
         "id": job_id,
         **job.model_dump(),
+        "company_id": current_user.company_id,
         "status": JobStatus.PENDING,
         "created_at": datetime.now(),
     }
@@ -611,20 +774,22 @@ async def create_job(job: JobCreate):
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobResponse, tags=["Jobs"])
-async def get_job(job_id: str):
+async def get_job(job_id: str, current_user: UserResponse = Depends(get_current_user)):
     """Get a specific job by ID."""
-    if job_id not in _jobs:
+    job = _jobs.get(job_id)
+    if not job or job.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JobResponse(**_jobs[job_id])
+    return JobResponse(**job)
 
 
 @app.patch("/api/jobs/{job_id}", response_model=JobResponse, tags=["Jobs"])
-async def update_job(job_id: str, update: JobUpdate):
+async def update_job(job_id: str, update: JobUpdate, current_user: UserResponse = Depends(get_current_user)):
     """Update a job."""
-    if job_id not in _jobs:
+    job = _jobs.get(job_id)
+    if not job or job.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    job_data = _jobs[job_id]
+    job_data = job
     update_data = update.model_dump(exclude_unset=True)
     job_data.update(update_data)
     
@@ -636,35 +801,38 @@ async def update_job(job_id: str, update: JobUpdate):
 
 
 @app.delete("/api/jobs/{job_id}", status_code=204, tags=["Jobs"])
-async def delete_job(job_id: str):
+async def delete_job(job_id: str, current_user: UserResponse = Depends(get_current_user)):
     """Delete a job."""
-    if job_id not in _jobs:
+    job = _jobs.get(job_id)
+    if not job or job.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Job not found")
     del _jobs[job_id]
 
 
 @app.post("/api/jobs/{job_id}/tasks", response_model=JobResponse, tags=["Jobs"])
-async def add_job_task(job_id: str, task: JobTask):
+async def add_job_task(job_id: str, task: JobTask, current_user: UserResponse = Depends(get_current_user)):
     """Add a task to a job."""
-    if job_id not in _jobs:
+    job = _jobs.get(job_id)
+    if not job or job.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    _jobs[job_id].setdefault("tasks", []).append(task.model_dump())
-    return JobResponse(**_jobs[job_id])
+    job.setdefault("tasks", []).append(task.model_dump())
+    return JobResponse(**job)
 
 
 @app.patch("/api/jobs/{job_id}/tasks/{task_id}", response_model=JobResponse, tags=["Jobs"])
-async def update_job_task(job_id: str, task_id: str, completed: bool):
+async def update_job_task(job_id: str, task_id: str, completed: bool, current_user: UserResponse = Depends(get_current_user)):
     """Update task completion status."""
-    if job_id not in _jobs:
+    job = _jobs.get(job_id)
+    if not job or job.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Job not found")
     
-    for task in _jobs[job_id].get("tasks", []):
+    for task in job.get("tasks", []):
         if task["id"] == task_id:
             task["completed"] = completed
             break
     
-    return JobResponse(**_jobs[job_id])
+    return JobResponse(**job)
 
 
 # =============================================================================
@@ -677,9 +845,11 @@ async def list_parts(
     limit: int = Query(50, ge=1, le=100),
     category: Optional[str] = None,
     low_stock: bool = False,
+    current_user: UserResponse = Depends(get_current_user),
 ):
-    """List all parts with optional filtering."""
-    parts = list(_parts.values())
+    """List all parts for the user's company with optional filtering."""
+    company_id = current_user.company_id
+    parts = [p for p in _parts.values() if p.get("company_id") == company_id]
     
     # Add is_low_stock flag
     for p in parts:
@@ -694,35 +864,40 @@ async def list_parts(
 
 
 @app.post("/api/parts", response_model=PartResponse, status_code=201, tags=["Inventory"])
-async def create_part(part: PartCreate):
-    """Add a new part to inventory."""
+async def create_part(part: PartCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Add a new part to inventory for user's company."""
     part_id = str(uuid.uuid4())
     part_data = {
         "id": part_id,
         **part.model_dump(),
         "is_low_stock": part.quantity <= part.min_level,
+        "company_id": current_user.company_id,
     }
     _parts[part_id] = part_data
     return PartResponse(**part_data)
 
 
 @app.get("/api/parts/{part_id}", response_model=PartResponse, tags=["Inventory"])
-async def get_part(part_id: str):
-    """Get a specific part by ID."""
+async def get_part(part_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a specific part by ID if it belongs to user's company."""
     if part_id not in _parts:
         raise HTTPException(status_code=404, detail="Part not found")
     part = _parts[part_id]
+    if part.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Part not found")
     part["is_low_stock"] = part["quantity"] <= part["min_level"]
     return PartResponse(**part)
 
 
 @app.patch("/api/parts/{part_id}", response_model=PartResponse, tags=["Inventory"])
-async def update_part(part_id: str, update: PartUpdate):
-    """Update a part."""
+async def update_part(part_id: str, update: PartUpdate, current_user: UserResponse = Depends(get_current_user)):
+    """Update a part if it belongs to user's company."""
     if part_id not in _parts:
         raise HTTPException(status_code=404, detail="Part not found")
     
     part_data = _parts[part_id]
+    if part_data.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Part not found")
     update_data = update.model_dump(exclude_unset=True)
     part_data.update(update_data)
     part_data["is_low_stock"] = part_data["quantity"] <= part_data["min_level"]
@@ -731,9 +906,11 @@ async def update_part(part_id: str, update: PartUpdate):
 
 
 @app.post("/api/parts/{part_id}/adjust", response_model=PartResponse, tags=["Inventory"])
-async def adjust_stock(part_id: str, quantity: int, reason: str):
-    """Adjust stock quantity (positive or negative)."""
+async def adjust_stock(part_id: str, quantity: int, reason: str, current_user: UserResponse = Depends(get_current_user)):
+    """Adjust stock quantity (positive or negative) if part belongs to user's company."""
     if part_id not in _parts:
+        raise HTTPException(status_code=404, detail="Part not found")
+    if _parts[part_id].get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Part not found")
     
     _parts[part_id]["quantity"] += quantity
@@ -752,9 +929,11 @@ async def list_invoices(
     limit: int = Query(50, ge=1, le=100),
     type: Optional[str] = None,
     status: Optional[InvoiceStatus] = None,
+    current_user: UserResponse = Depends(get_current_user),
 ):
-    """List all invoices/quotes."""
-    invoices = list(_invoices.values())
+    """List all invoices/quotes for the user's company."""
+    company_id = current_user.company_id
+    invoices = [inv for inv in _invoices.values() if inv.get("company_id") == company_id]
     if type:
         invoices = [i for i in invoices if i.get("type") == type]
     if status:
@@ -763,8 +942,13 @@ async def list_invoices(
 
 
 @app.post("/api/invoices", response_model=InvoiceResponse, status_code=201, tags=["Invoices"])
-async def create_invoice(invoice: InvoiceCreate):
-    """Create a new invoice or quote."""
+async def create_invoice(invoice: InvoiceCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Create a new invoice or quote for current user's company."""
+    # ensure referenced customer belongs to same company
+    cust = _customers.get(invoice.customer_id)
+    if not cust or cust.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=400, detail="Customer must belong to your company")
+
     invoice_id = str(uuid.uuid4())
     prefix = "INV" if invoice.type == "Invoice" else "QT"
     number = f"{prefix}-{invoice_id[:8].upper()}"
@@ -777,6 +961,7 @@ async def create_invoice(invoice: InvoiceCreate):
     invoice_data = {
         "id": invoice_id,
         **invoice.model_dump(),
+        "company_id": current_user.company_id,
         "number": number,
         "issue_date": datetime.now(),
         "due_date": datetime.now() + timedelta(days=30),
@@ -790,21 +975,23 @@ async def create_invoice(invoice: InvoiceCreate):
 
 
 @app.get("/api/invoices/{invoice_id}", response_model=InvoiceResponse, tags=["Invoices"])
-async def get_invoice(invoice_id: str):
-    """Get a specific invoice by ID."""
-    if invoice_id not in _invoices:
+async def get_invoice(invoice_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a specific invoice by ID if it belongs to the user's company."""
+    inv = _invoices.get(invoice_id)
+    if not inv or inv.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    return InvoiceResponse(**_invoices[invoice_id])
+    return InvoiceResponse(**inv)
 
 
 @app.patch("/api/invoices/{invoice_id}/status", response_model=InvoiceResponse, tags=["Invoices"])
-async def update_invoice_status(invoice_id: str, status: InvoiceStatus):
-    """Update invoice status."""
-    if invoice_id not in _invoices:
+async def update_invoice_status(invoice_id: str, status: InvoiceStatus, current_user: UserResponse = Depends(get_current_user)):
+    """Update invoice status if it belongs to the user's company."""
+    inv = _invoices.get(invoice_id)
+    if not inv or inv.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Invoice not found")
     
-    _invoices[invoice_id]["status"] = status
-    return InvoiceResponse(**_invoices[invoice_id])
+    inv["status"] = status
+    return InvoiceResponse(**inv)
 
 
 # =============================================================================
@@ -868,19 +1055,24 @@ async def get_model_info():
 # =============================================================================
 
 @app.get("/api/analytics/dashboard", response_model=DashboardStats, tags=["Analytics"])
-async def get_dashboard_stats():
-    """Get dashboard statistics."""
-    jobs = list(_jobs.values())
+async def get_dashboard_stats(current_user: UserResponse = Depends(get_current_user)):
+    """Get dashboard statistics scoped to the current user's company."""
+    company_id = current_user.company_id
+    jobs = [j for j in _jobs.values() if j.get("company_id") == company_id]
+    customers = [c for c in _customers.values() if c.get("company_id") == company_id]
+    vehicles = [v for v in _vehicles.values() if _customers.get(v.get("owner_id"), {}).get("company_id") == company_id]
+    parts = [p for p in _parts.values() if p.get("company_id") == company_id]
+    invoices = [i for i in _invoices.values() if i.get("company_id") == company_id]
     
     return DashboardStats(
         total_jobs=len(jobs),
         pending_jobs=sum(1 for j in jobs if j.get("status") == JobStatus.PENDING),
         in_progress_jobs=sum(1 for j in jobs if j.get("status") == JobStatus.IN_PROGRESS),
         completed_jobs=sum(1 for j in jobs if j.get("status") in [JobStatus.COMPLETED, JobStatus.PAID]),
-        total_revenue=sum(j.get("estimated_cost", 0) for j in jobs if j.get("status") == JobStatus.PAID),
-        total_customers=len(_customers),
-        total_vehicles=len(_vehicles),
-        low_stock_count=sum(1 for p in _parts.values() if p.get("quantity", 0) <= p.get("min_level", 0)),
+        total_revenue=sum(i.get("total", 0) for i in invoices if i.get("status") == InvoiceStatus.PAID),
+        total_customers=len(customers),
+        total_vehicles=len(vehicles),
+        low_stock_count=sum(1 for p in parts if p.get("quantity", 0) <= p.get("min_level", 0)),
     )
 
 
@@ -888,30 +1080,31 @@ async def get_dashboard_stats():
 async def get_revenue_analytics(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    current_user: UserResponse = Depends(get_current_user),
 ):
-    """Get revenue analytics over time."""
-    # Demo data
+    """Get revenue analytics over time for the current user's company."""
+    company_id = current_user.company_id
+    invoices = [i for i in _invoices.values() if i.get("company_id") == company_id]
+    total_revenue = sum(i.get("total", 0) for i in invoices if i.get("status") == InvoiceStatus.PAID)
+    # Simple monthly trend derived from invoice issue_date
+    monthly = {}
+    for inv in invoices:
+        month = inv.get("issue_date").strftime("%b") if isinstance(inv.get("issue_date"), datetime) else "N/A"
+        monthly[month] = monthly.get(month, 0) + inv.get("total", 0)
+
     return {
-        "total_revenue": 125000,
-        "average_job_value": 2500,
-        "revenue_by_service": {
-            "General Service": 35000,
-            "Brake Service": 25000,
-            "Diagnostics": 20000,
-            "Other": 45000,
-        },
-        "monthly_trend": [
-            {"month": "Jan", "revenue": 15000},
-            {"month": "Feb", "revenue": 18000},
-            {"month": "Mar", "revenue": 22000},
-        ],
+        "total_revenue": total_revenue,
+        "average_job_value": (total_revenue / max(1, sum(1 for i in invoices if i.get("type") == "Invoice"))),
+        "revenue_by_service": {},
+        "monthly_trend": [{"month": m, "revenue": v} for m, v in monthly.items()],
     }
 
 
 @app.get("/api/analytics/jobs", tags=["Analytics"])
-async def get_job_analytics():
-    """Get job analytics."""
-    jobs = list(_jobs.values())
+async def get_job_analytics(current_user: UserResponse = Depends(get_current_user)):
+    """Get job analytics scoped to the user's company."""
+    company_id = current_user.company_id
+    jobs = [j for j in _jobs.values() if j.get("company_id") == company_id]
     
     return {
         "total": len(jobs),

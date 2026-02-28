@@ -8,6 +8,7 @@ import { companyProfile } from '../services/companyProfile';
 import { signInWithGoogle } from '../services/googleAuth';
 import { emailService } from '../services/emailService';
 import { AuthService } from '../services/auth';
+import { FirestoreService } from '../services/firestore';
 import { CompanyProfile, User, UserRole } from '../types';
 import { useAuth } from '../components/AuthContext';
 import { Permission, ROLE_LABELS, ROLE_COLORS, ROLE_DESCRIPTIONS } from '../services/rbac';
@@ -44,6 +45,10 @@ export const Settings: React.FC = () => {
   const [signingUp, setSigningUp] = useState(false);
   const [signupError, setSignupError] = useState<string | null>(null);
 
+  // companies for registration
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<string>('');
+
   // combined error message for card
   const globalError = signInError || emailError || signupError;
 
@@ -78,7 +83,7 @@ export const Settings: React.FC = () => {
     setSigningUp(true);
     setSignupError(null);
     try {
-      await AuthService.signUp(email, password, signupName);
+      await AuthService.signUp(email, password, signupName, UserRole.TECHNICIAN, selectedCompany);
     } catch (err: any) {
       setSignupError(err?.message || 'Sign-up failed');
     } finally {
@@ -126,6 +131,13 @@ export const Settings: React.FC = () => {
   // Check if user has a company assigned
   const hasCompany = userProfile?.companyId && userProfile.companyId.length > 0;
   const isSystemAdmin = userProfile?.role === UserRole.SYSTEM_ADMIN;
+
+  // load companies for signup dropdown
+  useEffect(() => {
+    FirestoreService.getAll<Company>('companies')
+      .then(setCompanies)
+      .catch(() => setCompanies([]));
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -378,6 +390,20 @@ export const Settings: React.FC = () => {
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Company</label>
+              <select
+                value={selectedCompany}
+                onChange={e => setSelectedCompany(e.target.value)}
+                required
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">Select company</option>
+                {companies.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            </div>
             <button
               type="submit"
               className="w-full flex justify-center items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
@@ -385,7 +411,8 @@ export const Settings: React.FC = () => {
                 email === '' ||
                 password === '' ||
                 signupName === '' ||
-                password !== signupConfirm
+                password !== signupConfirm ||
+                selectedCompany === ''
               }
             >
               {signingUp ? 'Creating…' : 'Create account'}

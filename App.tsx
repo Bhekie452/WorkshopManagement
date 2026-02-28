@@ -101,7 +101,7 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
     }
     setSigningUp(true);
     try {
-      const user = await AuthService.signUp(email, password, signupName);
+      const user = await AuthService.signUp(email, password, signupName, UserRole.TECHNICIAN, selectedCompany);
       onLogin(user);
     } catch (err: any) {
       setSignupError(err.message || 'Registration failed');
@@ -270,6 +270,20 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
                     placeholder="Confirm Password"
                     minLength={6}
                   />
+                  {/* company selection */}
+                  {companies.length > 0 && (
+                    <select
+                      required
+                      value={selectedCompany}
+                      onChange={e => setSelectedCompany(e.target.value)}
+                      className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    >
+                      <option value="">Select Company</option>
+                      {companies.map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  )}
                   <button
                     type="submit"
                     disabled={signingUp}
@@ -298,6 +312,8 @@ const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
+  const [companies, setCompanies] = useState<Company[]>([]);
+  const [selectedCompany, setSelectedCompany] = useState<string>("");
   const [storeReady, setStoreReady] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
 
@@ -306,6 +322,13 @@ const App: React.FC = () => {
     store.init()
       .then(() => setStoreReady(true))
       .catch(() => setStoreReady(true)); // fallback to localStorage cache
+  }, []);
+
+  // load companies for registration dropdown
+  useEffect(() => {
+    FirestoreService.getAll<Company>('companies')
+      .then(setCompanies)
+      .catch(() => setCompanies([]));
   }, []);
 
   // Check for session persistence

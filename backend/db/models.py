@@ -97,6 +97,9 @@ class Company(Base):
     vat_number: Mapped[Optional[str]] = mapped_column(String(50))
     logo_url: Mapped[Optional[str]] = mapped_column(String(500))
     settings: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    industry: Mapped[Optional[str]] = mapped_column(String(100))
+    subscription: Mapped[str] = mapped_column(String(50), default="free")
+    max_users: Mapped[int] = mapped_column(Integer, default=5)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -119,7 +122,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    company_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("companies.id"), nullable=True)
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
     email: Mapped[str] = mapped_column(String(200), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(200), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -150,7 +153,7 @@ class Customer(Base):
     __tablename__ = "customers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    company_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("companies.id"))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     email: Mapped[str] = mapped_column(String(200), index=True)
     phone: Mapped[str] = mapped_column(String(50))
@@ -394,6 +397,7 @@ class Invoice(Base):
     __tablename__ = "invoices"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
     customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), nullable=False)
     vehicle_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("vehicles.id"))
     job_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("jobs.id"))
@@ -426,6 +430,7 @@ class Invoice(Base):
     __table_args__ = (
         Index('idx_invoice_status', 'status'),
         Index('idx_invoice_customer', 'customer_id'),
+        Index('idx_invoice_company', 'company_id'),
     )
 
     def __repr__(self):

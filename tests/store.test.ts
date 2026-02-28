@@ -35,6 +35,13 @@ describe('Store Service', () => {
     localStorage.clear();
   });
 
+  describe('Companies', () => {
+    it('getCompanies returns array of companies', () => {
+      const companies = store.getCompanies ? store.getCompanies() : [];
+      expect(Array.isArray(companies)).toBe(true);
+    });
+  });
+
   describe('Customers', () => {
     it('getCustomers returns array of customers', () => {
       const customers = store.getCustomers();
@@ -46,6 +53,7 @@ describe('Store Service', () => {
       
       const newCustomer = {
         id: '',
+        companyId: 'company-1',
         name: 'Test Customer',
         email: 'test@example.com',
         phone: '012 345 6789',
@@ -59,6 +67,7 @@ describe('Store Service', () => {
       
       expect(created.id).toBeTruthy();
       expect(created.name).toBe('Test Customer');
+      expect(created.companyId).toBe('company-1');
       expect(store.getCustomers().length).toBe(initialCount + 1);
     });
 
@@ -95,6 +104,7 @@ describe('Store Service', () => {
       
       const newVehicle = {
         id: '',
+        companyId: 'company-1',
         ownerId: 'c1',
         registration: 'NEW 123 GP',
         vin: 'TESTVIN123',
@@ -111,6 +121,7 @@ describe('Store Service', () => {
       
       expect(created.id).toBeTruthy();
       expect(created.registration).toBe('NEW 123 GP');
+      expect(created.companyId).toBe('company-1');
       expect(store.getVehicles().length).toBe(initialCount + 1);
     });
 
@@ -149,6 +160,7 @@ describe('Store Service', () => {
       
       const newJob = {
         id: '',
+        companyId: 'company-1',
         customerId: 'c1',
         vehicleId: 'v1',
         status: JobStatus.PENDING,
@@ -168,8 +180,8 @@ describe('Store Service', () => {
         attachments: [],
       };
 
-      store.addJob(newJob);
-      
+      const added = store.addJob(newJob);
+      expect(added.companyId).toBe('company-1');
       expect(store.getJobs().length).toBe(initialCount + 1);
     });
 
@@ -272,6 +284,7 @@ describe('Store Service', () => {
       
       const newInvoice = {
         id: '',
+        companyId: 'company-1',
         type: 'Invoice' as const,
         customerId: 'c1',
         vehicleId: 'v1',
@@ -285,8 +298,8 @@ describe('Store Service', () => {
         status: 'Draft' as const,
       };
 
-      store.addInvoice(newInvoice);
-      
+      const addedInv = store.addInvoice(newInvoice);
+      expect(addedInv.companyId).toBe('company-1');
       expect(store.getInvoices().length).toBe(initialCount + 1);
     });
   });

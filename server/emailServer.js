@@ -184,6 +184,7 @@ const sanitizeUser = (user) => ({
   name: user.name,
   email: user.email,
   role: user.role,
+  companyId: user.companyId || null,
   avatar: user.avatar,
   createdAt: user.createdAt,
   permissions: ROLE_PERMISSIONS[user.role] || [],
@@ -193,6 +194,7 @@ const signAccessToken = (user) => jwt.sign({
   sub: user.id,
   email: user.email,
   role: user.role,
+  companyId: user.companyId || null,
   permissions: ROLE_PERMISSIONS[user.role] || [],
   type: 'access',
 }, ACCESS_TOKEN_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN });
@@ -271,10 +273,10 @@ app.get('/health', (req, res) => {
 // ---------- Auth Endpoints ----------
 app.post('/api/auth/signup', rateLimit(10), async (req, res) => {
   try {
-    const { name, email, password, role } = req.body || {};
+    const { name, email, password, role, companyId } = req.body || {};
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Missing required fields: name, email, password' });
+    if (!name || !email || !password || !companyId) {
+      return res.status(400).json({ error: 'Missing required fields: name, email, password, companyId' });
     }
 
     if (typeof password !== 'string' || password.length < 6) {
@@ -295,6 +297,7 @@ app.post('/api/auth/signup', rateLimit(10), async (req, res) => {
       name,
       email: String(email).toLowerCase(),
       role: nextRole,
+      companyId: companyId,
       avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`,
       passwordHash,
       sessions: [],

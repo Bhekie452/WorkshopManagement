@@ -7,21 +7,25 @@ import {
 import { FirestoreService, Collections } from './firestore';
 
 // Seed Data
+const MOCK_COMPANIES: { id: string; name: string }[] = [
+  { id: 'company-1', name: 'AutoFlow Workshop' },
+];
+
 const MOCK_USERS: User[] = [
-  { id: '1', name: 'Admin User', email: 'admin@autoflow.com', role: UserRole.ADMIN, avatar: 'https://ui-avatars.com/api/?name=Admin+User&background=random' },
-  { id: '2', name: 'John Tech', email: 'tech@autoflow.com', role: UserRole.TECHNICIAN, avatar: 'https://ui-avatars.com/api/?name=John+Tech&background=random' },
+  { id: '1', name: 'Admin User', email: 'admin@autoflow.com', role: UserRole.ADMIN, avatar: 'https://ui-avatars.com/api/?name=Admin+User&background=random', companyId: 'company-1' },
+  { id: '2', name: 'John Tech', email: 'tech@autoflow.com', role: UserRole.TECHNICIAN, avatar: 'https://ui-avatars.com/api/?name=John+Tech&background=random', companyId: 'company-1' },
 ];
 
 const MOCK_CUSTOMERS: Customer[] = [
-  { id: 'c1', name: 'Alice Johnson', email: 'alice@example.com', phone: '082 555 0101', address: '123 Maple St', consent: true, type: 'Private', attachments: [] },
-  { id: 'c2', name: 'Bob Smith', email: 'bob@example.com', phone: '083 555 0102', address: '456 Oak Ave', consent: true, type: 'Private', attachments: [] },
-  { id: 'c3', name: 'Charlie Davis', email: 'charlie@example.com', phone: '072 555 0103', address: '789 Pine Rd', consent: true, type: 'Private', attachments: [] },
-  { id: 'c4', name: 'Dept of Transport', email: 'fleet@gov.za', phone: '012 555 9999', address: 'Pretoria Central', consent: true, type: 'Government', department: 'Logistics', attachments: [] },
-  { id: 'c5', name: 'Swift Logistics', email: 'ops@swift.co.za', phone: '011 555 8888', address: 'Kempton Park', consent: true, type: 'Fleet', attachments: [] },
+  { id: 'c1', companyId: 'company-1', name: 'Alice Johnson', email: 'alice@example.com', phone: '082 555 0101', address: '123 Maple St', consent: true, type: 'Private', attachments: [] },
+  { id: 'c2', companyId: 'company-1', name: 'Bob Smith', email: 'bob@example.com', phone: '083 555 0102', address: '456 Oak Ave', consent: true, type: 'Private', attachments: [] },
+  { id: 'c3', companyId: 'company-1', name: 'Charlie Davis', email: 'charlie@example.com', phone: '072 555 0103', address: '789 Pine Rd', consent: true, type: 'Private', attachments: [] },
+  { id: 'c4', companyId: 'company-1', name: 'Dept of Transport', email: 'fleet@gov.za', phone: '012 555 9999', address: 'Pretoria Central', consent: true, type: 'Government', department: 'Logistics', attachments: [] },
+  { id: 'c5', companyId: 'company-1', name: 'Swift Logistics', email: 'ops@swift.co.za', phone: '011 555 8888', address: 'Kempton Park', consent: true, type: 'Fleet', attachments: [] },
 ];
 
 const MOCK_VEHICLES: Vehicle[] = [
-  { id: 'v1', ownerId: 'c1', registration: 'AB 123 CD', vin: '1HGCM82633A004352', make: 'Honda', model: 'Civic', year: 2018, color: 'Silver', fuelType: 'Petrol', mileage: 45000, mileageHistory: [{date: new Date().toISOString(), mileage: 45000, source: 'Initial Import'}] },
+  { id: 'v1', companyId: 'company-1', ownerId: 'c1', registration: 'AB 123 CD', vin: '1HGCM82633A004352', make: 'Honda', model: 'Civic', year: 2018, color: 'Silver', fuelType: 'Petrol', mileage: 45000, mileageHistory: [{date: new Date().toISOString(), mileage: 45000, source: 'Initial Import'}] },
   { id: 'v2', ownerId: 'c2', registration: 'XY 987 ZW', vin: '5YJ3E1EA1JF000001', make: 'Tesla', model: 'Model 3', year: 2021, color: 'White', fuelType: 'Electric', mileage: 12000, mileageHistory: [{date: new Date().toISOString(), mileage: 12000, source: 'Initial Import'}] },
   { id: 'v3', ownerId: 'c3', registration: 'EF 456 GH', vin: 'WA1LAAGE6MD000002', make: 'Audi', model: 'e-tron', year: 2022, color: 'Blue', fuelType: 'Electric', mileage: 8000, mileageHistory: [{date: new Date().toISOString(), mileage: 8000, source: 'Initial Import'}] },
   { id: 'v4', ownerId: 'c4', registration: 'GV 001 GP', vin: '123GOV001', make: 'Toyota', model: 'Hilux', year: 2023, color: 'White', fuelType: 'Diesel', mileage: 15000, mileageHistory: [{date: new Date().toISOString(), mileage: 15000, source: 'Initial Import'}] },
@@ -30,7 +34,7 @@ const MOCK_VEHICLES: Vehicle[] = [
 
 const MOCK_JOBS: Job[] = [
   { 
-    id: 'JOB-8492', customerId: 'c1', vehicleId: 'v1', status: JobStatus.IN_PROGRESS, priority: Priority.MEDIUM, 
+    id: 'JOB-8492', companyId: 'company-1', customerId: 'c1', vehicleId: 'v1', status: JobStatus.IN_PROGRESS, priority: Priority.MEDIUM, 
     serviceType: 'Regular Service', description: 'Oil change and brake check', notes: 'Customer mentioned squeaky brakes',
     estimatedCost: 2500, createdAt: new Date(Date.now() - 86400000 * 2).toISOString(), dueDate: new Date(Date.now() + 86400000).toISOString(),
     tasks: [{id: 't1', description: 'Drain Oil', completed: true}, {id: 't2', description: 'Replace Filter', completed: false}],
@@ -82,7 +86,7 @@ const MOCK_APPOINTMENTS: Appointment[] = [
 
 const MOCK_INVOICES: Invoice[] = [
   { 
-    id: 'INV-1001', type: 'Invoice', jobId: 'JOB-1023', customerId: 'c1', vehicleId: 'v1', number: 'INV-001', 
+    id: 'INV-1001', companyId: 'company-1', type: 'Invoice', jobId: 'JOB-1023', customerId: 'c1', vehicleId: 'v1', number: 'INV-001', 
     issueDate: new Date(Date.now() - 86400000 * 9).toISOString(), dueDate: new Date(Date.now() + 86400000 * 20).toISOString(),
     items: [{ id: 'i1', description: 'Tire Rotation', quantity: 1, unitPrice: 800, total: 800 }],
     subtotal: 800, taxAmount: 120, total: 920, status: 'Paid'
@@ -103,6 +107,25 @@ const get = <T>(key: string, initial: T): T => {
     return initial;
   }
   return JSON.parse(stored);
+};
+
+// Helper to access cached companies; used for signup dropdown
+const getCompanies = (): {id:string;name:string}[] => {
+  return get<{id:string;name:string}>('companies', MOCK_COMPANIES);
+};
+
+// Filter array of items based on current user's companyId (if present)
+const filterByCompany = <T extends {companyId?: string}>(items: T[]): T[] => {
+  try {
+    const stored = localStorage.getItem('currentUser');
+    const user = stored ? JSON.parse(stored) : null;
+    if (user && user.companyId) {
+      return items.filter(i => i.companyId === user.companyId);
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return items;
 };
 
 const set = <T>(key: string, data: T) => {
@@ -177,6 +200,9 @@ export const store = {
   init: initializeStore,
   isInitialized: () => _initialized,
 
+  // ==================== COMPANIES ====================
+  getCompanies: () => get<{id:string;name:string}>('companies', MOCK_COMPANIES),
+
   // ==================== USERS ====================
   getUsers: () => MOCK_USERS,
   
@@ -190,11 +216,13 @@ export const store = {
   },
 
   // ==================== CUSTOMERS ====================
-  getCustomers: () => get<Customer[]>('customers', MOCK_CUSTOMERS),
+  getCustomers: () => filterByCompany(get<Customer[]>('customers', MOCK_CUSTOMERS)),
   
   addCustomer: (c: Customer) => {
     const list = get<Customer[]>('customers', MOCK_CUSTOMERS);
-    const newItem = { ...c, id: c.id || Math.random().toString(36).substr(2, 9), attachments: c.attachments || [] };
+    const userStr = localStorage.getItem('currentUser');
+    const companyId = userStr ? JSON.parse(userStr).companyId : undefined;
+    const newItem = { ...c, id: c.id || Math.random().toString(36).substr(2, 9), attachments: c.attachments || [], companyId: c.companyId || companyId };
     set('customers', [...list, newItem]);
     firestoreSave(Collections.CUSTOMERS, newItem.id, newItem);
     return newItem;
@@ -231,19 +259,22 @@ export const store = {
   // ==================== VEHICLES ====================
   getVehicles: () => {
     const vehicles = get<Vehicle[]>('vehicles', MOCK_VEHICLES);
-    return vehicles.map(v => ({...v, mileageHistory: v.mileageHistory || [] }));
+    return filterByCompany(vehicles).map(v => ({...v, mileageHistory: v.mileageHistory || [] }));
   },
   
   getVehiclesByOwner: (ownerId: string) => {
-    const vehicles = get<Vehicle[]>('vehicles', MOCK_VEHICLES);
+    const vehicles = filterByCompany(get<Vehicle[]>('vehicles', MOCK_VEHICLES));
     return vehicles.filter(v => v.ownerId === ownerId);
   },
   
   addVehicle: (v: Vehicle) => {
     const list = get<Vehicle[]>('vehicles', MOCK_VEHICLES);
+    const userStr = localStorage.getItem('currentUser');
+    const companyId = userStr ? JSON.parse(userStr).companyId : undefined;
     const newItem = { 
       ...v, 
       id: Math.random().toString(36).substr(2, 9),
+      companyId: v.companyId || companyId,
       mileageHistory: v.mileageHistory || [{date: new Date().toISOString(), mileage: v.mileage, source: 'Initial Import'}] 
     };
     set('vehicles', [...list, newItem]);
@@ -286,7 +317,7 @@ export const store = {
   },
 
   // ==================== JOBS ====================
-  getJobs: () => get<Job[]>('jobs', MOCK_JOBS),
+  getJobs: () => filterByCompany(get<Job[]>('jobs', MOCK_JOBS)),
   
   getJobById: (id: string): Job | undefined => {
     const jobs = get<Job[]>('jobs', MOCK_JOBS);
@@ -295,9 +326,12 @@ export const store = {
   
   addJob: (j: Job) => {
     const list = get<Job[]>('jobs', MOCK_JOBS);
+    const userStr = localStorage.getItem('currentUser');
+    const companyId = userStr ? JSON.parse(userStr).companyId : undefined;
     const newItem = { 
       ...j, 
       id: `JOB-${Math.floor(Math.random() * 10000)}`,
+      companyId: j.companyId || companyId,
       tasks: j.tasks || [],
       partsUsed: [],
       laborLog: [],
@@ -472,13 +506,16 @@ export const store = {
   },
 
   // ==================== INVOICES ====================
-  getInvoices: () => get<Invoice[]>('invoices', MOCK_INVOICES),
+  getInvoices: () => filterByCompany(get<Invoice[]>('invoices', MOCK_INVOICES)),
   
   addInvoice: (i: Invoice) => {
     const list = get<Invoice[]>('invoices', MOCK_INVOICES);
+    const userStr = localStorage.getItem('currentUser');
+    const companyId = userStr ? JSON.parse(userStr).companyId : undefined;
     const newItem = { 
       ...i, 
-      id: i.id || (i.type === 'Quote' ? `QT-${Math.floor(Math.random() * 10000)}` : `INV-${Math.floor(Math.random() * 10000)}`) 
+      id: i.id || (i.type === 'Quote' ? `QT-${Math.floor(Math.random() * 10000)}` : `INV-${Math.floor(Math.random() * 10000)}`),
+      companyId: i.companyId || companyId,
     };
     set('invoices', [newItem, ...list]);
     firestoreSave(Collections.INVOICES, newItem.id, newItem);
