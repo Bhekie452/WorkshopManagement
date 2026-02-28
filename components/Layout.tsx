@@ -208,7 +208,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
         </div>
 
         {/* User Menu Footer */}
-        <div ref={userMenuRef} className="absolute bottom-0 left-0 w-full p-4 bg-slate-950 border-t border-slate-800">
+        <div ref={userMenuRef} className="absolute bottom-0 left-0 w-full p-4 border-t border-slate-800">
           
           {/* Dropdown Menu */}
           {isUserMenuOpen && (
