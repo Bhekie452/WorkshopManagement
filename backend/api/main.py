@@ -416,6 +416,62 @@ class AppointmentResponse(AppointmentBase):
         from_attributes = True
 
 
+# --- Warranties ---
+class WarrantyBase(BaseModel):
+    job_id: str
+    vehicle_id: str
+    warranty_type: str
+    expiry_date: datetime
+    coverage_description: Optional[str] = None
+
+
+class WarrantyCreate(WarrantyBase):
+    pass
+
+
+class WarrantyUpdate(BaseModel):
+    warranty_type: Optional[str] = None
+    expiry_date: Optional[datetime] = None
+    coverage_description: Optional[str] = None
+
+
+class WarrantyResponse(WarrantyBase):
+    id: str
+    company_id: str
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# --- Job Attachments ---
+class JobAttachmentBase(BaseModel):
+    filename: str
+    file_type: str
+    file_size: int
+    description: Optional[str] = None
+
+
+class JobAttachmentCreate(BaseModel):
+    filename: str
+    file_type: str
+    file_size: int
+    description: Optional[str] = None
+
+
+class JobAttachmentResponse(JobAttachmentBase):
+    id: str
+    company_id: str
+    job_id: str
+    file_url: str
+    uploaded_by: Optional[str] = None
+    upload_date: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # --- EV Fleet ---
 class EVBatteryData(BaseModel):
     current_soh: float = Field(..., ge=0, le=100, description="State of Health %")
@@ -462,6 +518,8 @@ _jobs: Dict[str, dict] = {}
 _parts: Dict[str, dict] = {}
 _invoices: Dict[str, dict] = {}
 _appointments: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
+_warranties: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
+_attachments: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 
 
 # JWT Secret (generate per-instance if not configured)
@@ -1112,6 +1170,153 @@ async def delete_appointment(appointment_id: str, current_user: UserResponse = D
         raise HTTPException(status_code=404, detail="Appointment not found")
     
     del _appointments[company_id][appointment_id]
+    return None
+
+
+# =============================================================================
+# Warranties Endpoints
+# =============================================================================
+
+@app.get("/api/warranties", response_model=List[WarrantyResponse], tags=["Warranties"])
+async def list_warranties(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """List all warranties for the user's company."""
+    company_id = current_user.company_id
+    if company_id not in _warranties:
+        return []
+    
+    warranties = [w for w in _warranties[company_id].values()]
+    return [WarrantyResponse(**w) for w in warranties[skip:skip+limit]]
+
+
+@app.post("/api/warranties", response_model=WarrantyResponse, status_code=201, tags=["Warranties"])
+async def create_warranty(warranty: WarrantyCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Create a new warranty for the user's company."""
+    warranty_id = str(uuid.uuid4())
+    company_id = current_user.company_id
+    warranty_data = {
+        "id": warranty_id,
+        "company_id": company_id,
+        **warranty.model_dump(),
+    }
+    
+    if company_id not in _warranties:
+        _warranties[company_id] = {}
+    
+    _warranties[company_id][warranty_id] = warranty_data
+    return WarrantyResponse(**warranty_data)
+
+
+@app.get("/api/warranties/{warranty_id}", response_model=WarrantyResponse, tags=["Warranties"])
+async def get_warranty(warranty_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a specific warranty by ID if it belongs to the user's company."""
+    company_id = current_user.company_id
+    if company_id not in _warranties or warranty_id not in _warranties[company_id]:
+        raise HTTPException(status_code=404, detail="Warranty not found")
+    
+    return WarrantyResponse(**_warranties[company_id][warranty_id])
+
+
+@app.patch("/api/warranties/{warranty_id}", response_model=WarrantyResponse, tags=["Warranties"])
+async def update_warranty(warranty_id: str, update: WarrantyUpdate, current_user: UserResponse = Depends(get_current_user)):
+    """Update a warranty if it belongs to the user's company."""
+    company_id = current_user.company_id
+    if company_id not in _warranties or warranty_id not in _warranties[company_id]:
+        raise HTTPException(status_code=404, detail="Warranty not found")
+    
+    warranty_data = _warranties[company_id][warranty_id]
+    update_data = update.model_dump(exclude_unset=True)
+    warranty_data.update(update_data)
+    
+    return WarrantyResponse(**warranty_data)
+
+
+@app.delete("/api/warranties/{warranty_id}", status_code=204, tags=["Warranties"])
+async def delete_warranty(warranty_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete a warranty if it belongs to the user's company."""
+    company_id = current_user.company_id
+    if company_id not in _warranties or warranty_id not in _warranties[company_id]:
+        raise HTTPException(status_code=404, detail="Warranty not found")
+    
+    del _warranties[company_id][warranty_id]
+    return None
+
+
+# =============================================================================
+# Job Attachments Endpoints
+# =============================================================================
+
+@app.get("/api/jobs/{job_id}/attachments", response_model=List[JobAttachmentResponse], tags=["Attachments"])
+async def list_job_attachments(job_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """List all attachments for a job if it belongs to the user's company."""
+    company_id = current_user.company_id
+    
+    # Verify job exists and belongs to company
+    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if company_id not in _attachments:
+        return []
+    
+    attachments = [a for a in _attachments[company_id].values() if a.get("job_id") == job_id]
+    return [JobAttachmentResponse(**a) for a in attachments]
+
+
+@app.post("/api/jobs/{job_id}/attachments", response_model=JobAttachmentResponse, status_code=201, tags=["Attachments"])
+async def create_job_attachment(
+    job_id: str,
+    attachment: JobAttachmentCreate,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """
+    Create a new attachment for a job.
+    
+    Note: In production, file_url should come from Firebase Storage upload.
+    This endpoint expects the file to already be uploaded and accessible via file_url.
+    """
+    company_id = current_user.company_id
+    
+    # Verify job exists and belongs to company
+    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    attachment_id = str(uuid.uuid4())
+    attachment_data = {
+        "id": attachment_id,
+        "company_id": company_id,
+        "job_id": job_id,
+        "uploaded_by": current_user.id,
+        "upload_date": datetime.utcnow(),
+        **attachment.model_dump(),
+    }
+    
+    if company_id not in _attachments:
+        _attachments[company_id] = {}
+    
+    _attachments[company_id][attachment_id] = attachment_data
+    return JobAttachmentResponse(**attachment_data)
+
+
+@app.delete("/api/jobs/{job_id}/attachments/{attachment_id}", status_code=204, tags=["Attachments"])
+async def delete_job_attachment(job_id: str, attachment_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete a job attachment if it belongs to the user's company."""
+    company_id = current_user.company_id
+    
+    # Verify job exists and belongs to company
+    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if company_id not in _attachments or attachment_id not in _attachments[company_id]:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    
+    attachment = _attachments[company_id][attachment_id]
+    if attachment.get("job_id") != job_id:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    
+    del _attachments[company_id][attachment_id]
     return None
 
 

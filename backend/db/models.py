@@ -257,6 +257,7 @@ class Job(Base):
     parts_used: Mapped[List["JobPart"]] = relationship("JobPart", back_populates="job", cascade="all, delete-orphan")
     labor_log: Mapped[List["LaborEntry"]] = relationship("LaborEntry", back_populates="job", cascade="all, delete-orphan")
     activity_log: Mapped[List["JobActivityLog"]] = relationship("JobActivityLog", back_populates="job", cascade="all, delete-orphan")
+    attachments: Mapped[List["JobAttachment"]] = relationship("JobAttachment", back_populates="job", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('idx_job_status', 'status'),
@@ -562,4 +563,64 @@ class VoiceCommand(Base):
     response_text: Mapped[Optional[str]] = mapped_column(Text)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     context: Mapped[Optional[str]] = mapped_column(String(100))
+
+
+# =============================================================================
+# Table 14: Warranties
+# =============================================================================
+
+class Warranty(Base):
+    """Warranty coverage for jobs/vehicles."""
+    __tablename__ = "warranties"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(36), ForeignKey("jobs.id"), nullable=False)
+    vehicle_id: Mapped[str] = mapped_column(String(36), ForeignKey("vehicles.id"), nullable=False)
+    
+    warranty_type: Mapped[str] = mapped_column(String(100), nullable=False)  # 'labor', 'parts', 'labor_and_parts'
+    expiry_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    coverage_description: Mapped[Optional[str]] = mapped_column(Text)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    company: Mapped["Company"] = relationship("Company")
+    job: Mapped["Job"] = relationship("Job")
+    vehicle: Mapped["Vehicle"] = relationship("Vehicle")
+
+    def __repr__(self):
+        return f"<Warranty(id={self.id}, type={self.warranty_type}, expires={self.expiry_date})>"
+
+
+# =============================================================================
+# Table 15: Job Attachments
+# =============================================================================
+
+class JobAttachment(Base):
+    """File attachments for jobs."""
+    __tablename__ = "job_attachments"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
+    job_id: Mapped[str] = mapped_column(String(36), ForeignKey("jobs.id"), nullable=False)
+    
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_url: Mapped[str] = mapped_column(String(500), nullable=False)  # Firebase Storage URL
+    file_type: Mapped[str] = mapped_column(String(50))  # pdf, image, document, etc.
+    file_size: Mapped[int] = mapped_column(Integer, default=0)  # size in bytes
+    
+    uploaded_by: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
+    upload_date: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Relationships
+    company: Mapped["Company"] = relationship("Company")
+    job: Mapped["Job"] = relationship("Job", back_populates="attachments")
+    uploaded_by_user: Mapped[Optional["User"]] = relationship("User")
+
+    def __repr__(self):
+        return f"<JobAttachment(id={self.id}, filename={self.filename})>"
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
