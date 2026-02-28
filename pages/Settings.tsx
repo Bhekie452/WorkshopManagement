@@ -411,8 +411,7 @@ export const Settings: React.FC = () => {
                 email === '' ||
                 password === '' ||
                 signupName === '' ||
-                password !== signupConfirm ||
-                selectedCompany === ''
+                password !== signupConfirm
               }
             >
               {signingUp ? 'Creating…' : 'Create account'}

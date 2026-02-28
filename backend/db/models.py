@@ -301,6 +301,7 @@ class Part(Base):
     __tablename__ = "parts"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
     sku: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     description: Mapped[Optional[str]] = mapped_column(Text)
@@ -319,6 +320,7 @@ class Part(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
+    company: Mapped["Company"] = relationship("Company")
     job_usages: Mapped[List["JobPart"]] = relationship("JobPart", back_populates="part")
 
     @property
