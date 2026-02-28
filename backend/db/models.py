@@ -369,6 +369,7 @@ class LaborEntry(Base):
     __tablename__ = "labor_entries"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
     job_id: Mapped[str] = mapped_column(String(36), ForeignKey("jobs.id"), nullable=False)
     technician_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("users.id"))
     description: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -379,9 +380,12 @@ class LaborEntry(Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
+    company: Mapped["Company"] = relationship("Company")
     job: Mapped["Job"] = relationship("Job", back_populates="labor_log")
+    technician: Mapped[Optional["User"]] = relationship("User")
 
     @property
     def total(self) -> float:
@@ -514,12 +518,14 @@ class MileageRecord(Base):
     __tablename__ = "mileage_records"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
     vehicle_id: Mapped[str] = mapped_column(String(36), ForeignKey("vehicles.id"), nullable=False)
     mileage: Mapped[int] = mapped_column(Integer, nullable=False)
     source: Mapped[str] = mapped_column(String(100))  # Job, Import, Manual
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
+    company: Mapped["Company"] = relationship("Company")
     vehicle: Mapped["Vehicle"] = relationship("Vehicle", back_populates="mileage_history")
 
 

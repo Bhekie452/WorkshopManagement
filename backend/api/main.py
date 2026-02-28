@@ -472,6 +472,61 @@ class JobAttachmentResponse(JobAttachmentBase):
         from_attributes = True
 
 
+# --- Labor Entries ---
+class LaborEntryBase(BaseModel):
+    job_id: str
+    description: str
+    hours: float
+    rate_per_hour: float
+    technician_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
+
+class LaborEntryCreate(LaborEntryBase):
+    pass
+
+
+class LaborEntryUpdate(BaseModel):
+    description: Optional[str] = None
+    hours: Optional[float] = None
+    rate_per_hour: Optional[float] = None
+    technician_id: Optional[str] = None
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+
+
+class LaborEntryResponse(LaborEntryBase):
+    id: str
+    company_id: str
+    created_at: datetime
+    updated_at: datetime
+    total: float
+
+    class Config:
+        from_attributes = True
+
+
+# --- Mileage Records ---
+class MileageRecordBase(BaseModel):
+    vehicle_id: str
+    mileage: int
+    source: str
+
+
+class MileageRecordCreate(MileageRecordBase):
+    pass
+
+
+class MileageRecordResponse(MileageRecordBase):
+    id: str
+    company_id: str
+    recorded_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # --- EV Fleet ---
 class EVBatteryData(BaseModel):
     current_soh: float = Field(..., ge=0, le=100, description="State of Health %")
@@ -520,6 +575,8 @@ _invoices: Dict[str, dict] = {}
 _appointments: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _warranties: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _attachments: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
+_labor_entries: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
+_mileage_records: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 
 
 # JWT Secret (generate per-instance if not configured)
@@ -1318,6 +1375,195 @@ async def delete_job_attachment(job_id: str, attachment_id: str, current_user: U
     
     del _attachments[company_id][attachment_id]
     return None
+
+
+# =============================================================================
+# Labor Entry Endpoints
+# =============================================================================
+
+@app.get("/api/jobs/{job_id}/labor", response_model=List[LaborEntryResponse], tags=["Labor"])
+async def list_job_labor(job_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """List all labor entries for a job if it belongs to the user's company."""
+    company_id = current_user.company_id
+    
+    # Verify job exists and belongs to company
+    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if company_id not in _labor_entries:
+        return []
+    
+    labor_entries = [le for le in _labor_entries[company_id].values() if le.get("job_id") == job_id]
+    return [LaborEntryResponse(**le) for le in labor_entries]
+
+
+@app.post("/api/jobs/{job_id}/labor", response_model=LaborEntryResponse, status_code=201, tags=["Labor"])
+async def create_labor_entry(
+    job_id: str,
+    labor: LaborEntryCreate,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Create a new labor entry for a job."""
+    company_id = current_user.company_id
+    
+    # Verify job exists and belongs to company
+    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Verify labor entry is for the same job
+    if labor.job_id != job_id:
+        raise HTTPException(status_code=400, detail="Labor entry job_id must match URL job_id")
+    
+    labor_id = str(uuid.uuid4())
+    labor_data = {
+        "id": labor_id,
+        "company_id": company_id,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
+        **labor.model_dump(),
+    }
+    
+    if company_id not in _labor_entries:
+        _labor_entries[company_id] = {}
+    
+    _labor_entries[company_id][labor_id] = labor_data
+    return LaborEntryResponse(**labor_data)
+
+
+@app.patch("/api/jobs/{job_id}/labor/{labor_id}", response_model=LaborEntryResponse, tags=["Labor"])
+async def update_labor_entry(
+    job_id: str,
+    labor_id: str,
+    update: LaborEntryUpdate,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Update a labor entry if it belongs to the user's company."""
+    company_id = current_user.company_id
+    
+    # Verify job exists and belongs to company
+    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if company_id not in _labor_entries or labor_id not in _labor_entries[company_id]:
+        raise HTTPException(status_code=404, detail="Labor entry not found")
+    
+    labor_data = _labor_entries[company_id][labor_id]
+    if labor_data.get("job_id") != job_id:
+        raise HTTPException(status_code=404, detail="Labor entry not found")
+    
+    update_data = update.model_dump(exclude_unset=True)
+    labor_data.update(update_data)
+    labor_data["updated_at"] = datetime.utcnow()
+    
+    return LaborEntryResponse(**labor_data)
+
+
+@app.delete("/api/jobs/{job_id}/labor/{labor_id}", status_code=204, tags=["Labor"])
+async def delete_labor_entry(job_id: str, labor_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete a labor entry if it belongs to the user's company."""
+    company_id = current_user.company_id
+    
+    # Verify job exists and belongs to company
+    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if company_id not in _labor_entries or labor_id not in _labor_entries[company_id]:
+        raise HTTPException(status_code=404, detail="Labor entry not found")
+    
+    labor_data = _labor_entries[company_id][labor_id]
+    if labor_data.get("job_id") != job_id:
+        raise HTTPException(status_code=404, detail="Labor entry not found")
+    
+    del _labor_entries[company_id][labor_id]
+    return None
+
+
+# =============================================================================
+# Mileage Records Endpoints
+# =============================================================================
+
+@app.get("/api/vehicles/{vehicle_id}/mileage", response_model=List[MileageRecordResponse], tags=["Mileage"])
+async def list_vehicle_mileage(vehicle_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """List all mileage records for a vehicle if it belongs to the user's company."""
+    company_id = current_user.company_id
+    
+    # Verify vehicle exists and belongs to company (through customer)
+    if vehicle_id not in _vehicles:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    vehicle = _vehicles[vehicle_id]
+    customer = _customers.get(vehicle.get("owner_id"))
+    if not customer or customer.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    if company_id not in _mileage_records:
+        return []
+    
+    mileage_records = [mr for mr in _mileage_records[company_id].values() if mr.get("vehicle_id") == vehicle_id]
+    # Sort by recorded_at descending (newest first)
+    mileage_records.sort(key=lambda x: x.get("recorded_at", ""), reverse=True)
+    return [MileageRecordResponse(**mr) for mr in mileage_records]
+
+
+@app.post("/api/vehicles/{vehicle_id}/mileage", response_model=MileageRecordResponse, status_code=201, tags=["Mileage"])
+async def create_mileage_record(
+    vehicle_id: str,
+    mileage: MileageRecordCreate,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Create a new mileage record for a vehicle."""
+    company_id = current_user.company_id
+    
+    # Verify vehicle exists and belongs to company
+    if vehicle_id not in _vehicles:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    vehicle = _vehicles[vehicle_id]
+    customer = _customers.get(vehicle.get("owner_id"))
+    if not customer or customer.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    # Verify mileage is for the same vehicle
+    if mileage.vehicle_id != vehicle_id:
+        raise HTTPException(status_code=400, detail="Mileage vehicle_id must match URL vehicle_id")
+    
+    mileage_id = str(uuid.uuid4())
+    mileage_data = {
+        "id": mileage_id,
+        "company_id": company_id,
+        "recorded_at": datetime.utcnow(),
+        **mileage.model_dump(),
+    }
+    
+    if company_id not in _mileage_records:
+        _mileage_records[company_id] = {}
+    
+    _mileage_records[company_id][mileage_id] = mileage_data
+    return MileageRecordResponse(**mileage_data)
+
+
+@app.get("/api/vehicles/{vehicle_id}/mileage/{mileage_id}", response_model=MileageRecordResponse, tags=["Mileage"])
+async def get_mileage_record(vehicle_id: str, mileage_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a specific mileage record if it belongs to the user's company."""
+    company_id = current_user.company_id
+    
+    # Verify vehicle exists and belongs to company
+    if vehicle_id not in _vehicles:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    vehicle = _vehicles[vehicle_id]
+    customer = _customers.get(vehicle.get("owner_id"))
+    if not customer or customer.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    
+    if company_id not in _mileage_records or mileage_id not in _mileage_records[company_id]:
+        raise HTTPException(status_code=404, detail="Mileage record not found")
+    
+    mileage_data = _mileage_records[company_id][mileage_id]
+    if mileage_data.get("vehicle_id") != vehicle_id:
+        raise HTTPException(status_code=404, detail="Mileage record not found")
+    
+    return MileageRecordResponse(**mileage_data)
 
 
 # =============================================================================
