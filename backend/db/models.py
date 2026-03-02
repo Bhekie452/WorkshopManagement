@@ -764,3 +764,37 @@ class MessageLog(Base):
 
     def __repr__(self):
         return f"<MessageLog(id={self.id}, template={self.template_id}, status={self.status})>"
+
+
+# =============================================================================
+# Table: User Invitations
+# =============================================================================
+
+class UserInvitation(Base):
+    """User invitation tokens for email-based signup workflow."""
+    __tablename__ = "user_invitations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
+    email: Mapped[str] = mapped_column(String(200), unique=True, nullable=False, index=True)
+    role: Mapped[UserRoleEnum] = mapped_column(Enum(UserRoleEnum), default=UserRoleEnum.TECHNICIAN)
+    token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    
+    # Status tracking
+    accepted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    company: Mapped["Company"] = relationship("Company")
+
+    __table_args__ = (
+        Index('idx_invitation_company', 'company_id'),
+        Index('idx_invitation_email', 'email'),
+        Index('idx_invitation_expires', 'expires_at'),
+    )
+
+    def __repr__(self):
+        return f"<UserInvitation(id={self.id}, email={self.email}, company_id={self.company_id})>"

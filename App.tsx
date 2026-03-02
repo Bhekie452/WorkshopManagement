@@ -6,9 +6,10 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { store } from './services/store';
 // import { seedFirestore } from './services/seeder';
 import { AuthService } from './services/auth';
+import { FirestoreService } from './services/firestore';
 import { companyProfile as companyProfileService } from './services/companyProfile';
 import { emailService } from './services/emailService';
-import { User, UserRole } from './types';
+import { User, UserRole, Company } from './types';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { ThemeProvider } from './components/ThemeContext';
 import { Permission } from './services/rbac';
@@ -30,6 +31,10 @@ const Settings = React.lazy(() => import('./pages/Settings').then(module => ({ d
 const Companies = React.lazy(() => import('./pages/Companies'));
 const UsersManagement = React.lazy(() => import('./pages/UsersManagement'));
 const RolesPermissions = React.lazy(() => import('./pages/RolesPermissions'));
+const UserInvitations = React.lazy(() => import('./pages/UserInvitations') as Promise<{ default: React.ComponentType<any> }>);
+
+// Public Pages
+const AcceptInvitation = React.lazy(() => import('./pages/AcceptInvitation'));
 
 /** Renders children only if user has permission, otherwise redirects to / */
 const ProtectedRoute: React.FC<{ permission: Permission; children: React.ReactNode }> = ({ permission, children }) => {
@@ -44,7 +49,7 @@ const LoadingSpinner = () => (
   </div>
 );
 
-const Login = ({ onLogin }: { onLogin: (user: User) => void }) => {
+const Login = ({ onLogin, companies, selectedCompany, setSelectedCompany }: { onLogin: (user: User) => void; companies: Company[]; selectedCompany: string; setSelectedCompany: (v: string) => void }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [rememberMe, setRememberMe] = useState(false);
@@ -381,7 +386,7 @@ const App: React.FC = () => {
   }
 
   if (!user) {
-    return <Login onLogin={handleLogin} />;
+    return <Login onLogin={handleLogin} companies={companies} selectedCompany={selectedCompany} setSelectedCompany={setSelectedCompany} />;
   }
 
   if (!storeReady) {
@@ -416,6 +421,9 @@ const App: React.FC = () => {
                 <Route path="/admin/companies" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><Companies currentUser={user} /></ProtectedRoute>} />
                 <Route path="/admin/users" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><UsersManagement currentUser={user} /></ProtectedRoute>} />
                 <Route path="/admin/roles" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><RolesPermissions /></ProtectedRoute>} />
+                <Route path="/admin/invitations" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><UserInvitations /></ProtectedRoute>} />
+                {/* Public Routes */}
+                <Route path="/accept-invitation/:token" element={<AcceptInvitation />} />
                   <Route path="*" element={<Navigate to="/" replace />} />
                 </Routes>
               </Suspense>

@@ -44,6 +44,7 @@ from api.payfast import payfast_service
 from services.email_service import email_service
 from services.sms_service import sms_service
 from services.messaging_service import MessagingService, MessagingTemplates, init_messaging_service
+from services.invitation_service import invitation_service
 
 # Database imports (optional — falls back to in-memory if unavailable)
 try:
@@ -53,7 +54,7 @@ try:
         Base, Customer as DBCustomer, Vehicle as DBVehicle,
         Job as DBJob, Part as DBPart, Invoice as DBInvoice, User as DBUser,
         InvoiceItem as DBInvoiceItem, PaymentTransaction as DBPaymentTransaction,
-        Company as DBCompany, MessageLog as DBMessageLog,
+        Company as DBCompany, MessageLog as DBMessageLog, UserInvitation as DBUserInvitation,
     )
     # Use SQLite fallback if PostgreSQL not available
     DB_URL = os.getenv("DATABASE_URL", "")
@@ -218,6 +219,53 @@ class UserResponse(UserBase):
 
     class Config:
         from_attributes = True
+
+
+# --- User Invitations ---
+class UserInvitationBase(BaseModel):
+    email: EmailStr
+    role: UserRole = UserRole.TECHNICIAN
+
+
+class UserInvitationCreate(UserInvitationBase):
+    pass
+
+
+class UserInvitationResponse(UserInvitationBase):
+    id: str
+    company_id: str
+    created_at: datetime
+    expires_at: datetime
+    accepted_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AcceptInvitationRequest(BaseModel):
+    token: str
+    name: str
+    password: str
+
+
+class AcceptInvitationResponse(BaseModel):
+    success: bool
+    message: str
+    user: Optional[UserResponse] = None
+
+
+class PendingInvitationItem(BaseModel):
+    id: str
+    email: str
+    role: str
+    created_at: str
+    expires_at: str
+    is_expired: bool
+
+
+class PendingInvitationsResponse(BaseModel):
+    invitations: List[PendingInvitationItem]
+    total: int
 
 
 # --- Customers ---
@@ -3126,6 +3174,288 @@ async def get_message_history(
     except Exception as e:
         logger.error(f"Error retrieving message history: {e}")
         return []
+
+
+# =============================================================================
+# User Invitation Endpoints
+# =============================================================================
+
+@app.post("/api/admin/users/invite", response_model=Dict[str, Any], tags=["Admin"])
+async def invite_user(
+    invitation: UserInvitationCreate,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Invite a new user to join the company via email."""
+    if not DB_AVAILABLE or not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    # Check if current user is admin
+    if current_user.role not in [UserRole.SYSTEM_ADMIN, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only admins can invite users")
+    
+    try:
+        # Create invitation via async session
+        from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+        from sqlalchemy import select
+        
+        # Use sync session to check and create
+        existing_user = db.query(DBUser).filter(DBUser.email == invitation.email).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        existing_invite = db.query(DBUserInvitation).filter(
+            DBUserInvitation.email == invitation.email,
+            DBUserInvitation.company_id == current_user.company_id,
+            DBUserInvitation.accepted_at == None
+        ).first()
+        if existing_invite:
+            raise HTTPException(status_code=400, detail="Invitation already sent to this email")
+        
+        # Create invitation
+        token = invitation_service.generate_token()
+        expires_at = invitation_service.get_expiry_time()
+        
+        new_invitation = DBUserInvitation(
+            company_id=current_user.company_id,
+            email=invitation.email,
+            role=invitation.role,
+            token=token,
+            expires_at=expires_at
+        )
+        
+        db.add(new_invitation)
+        db.flush()
+        
+        # Send email asynchronously
+        asyncio.create_task(
+            invitation_service._send_invitation_email(
+                invitation.email,
+                token,
+                os.getenv("APP_BASE_URL", "http://localhost:5173")
+            )
+        )
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Invitation sent to {invitation.email}",
+            "invitation": {
+                "id": new_invitation.id,
+                "email": new_invitation.email,
+                "role": invitation.role,
+                "created_at": new_invitation.created_at.isoformat(),
+                "expires_at": new_invitation.expires_at.isoformat()
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating invitation: {e}")
+        raise HTTPException(status_code=500, detail=f"Error creating invitation: {str(e)}")
+
+
+@app.get("/api/admin/users/invitations", response_model=PendingInvitationsResponse, tags=["Admin"])
+async def get_pending_invitations(
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all pending invitations for the current company."""
+    if not DB_AVAILABLE or not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    # Check if current user is admin
+    if current_user.role not in [UserRole.SYSTEM_ADMIN, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only admins can view invitations")
+    
+    try:
+        invitations = db.query(DBUserInvitation).filter(
+            DBUserInvitation.company_id == current_user.company_id,
+            DBUserInvitation.accepted_at == None
+        ).order_by(DBUserInvitation.created_at.desc()).all()
+        
+        invitations_list = [
+            PendingInvitationItem(
+                id=inv.id,
+                email=inv.email,
+                role=inv.role.value,
+                created_at=inv.created_at.isoformat(),
+                expires_at=inv.expires_at.isoformat(),
+                is_expired=inv.expires_at < datetime.utcnow()
+            )
+            for inv in invitations
+        ]
+        
+        return PendingInvitationsResponse(
+            invitations=invitations_list,
+            total=len(invitations_list)
+        )
+    except Exception as e:
+        logger.error(f"Error retrieving pending invitations: {e}")
+        raise HTTPException(status_code=500, detail="Error retrieving invitations")
+
+
+@app.delete("/api/admin/users/invitations/{invitation_id}", tags=["Admin"])
+async def cancel_invitation(
+    invitation_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Cancel a pending invitation."""
+    if not DB_AVAILABLE or not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    # Check if current user is admin
+    if current_user.role not in [UserRole.SYSTEM_ADMIN, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Only admins can cancel invitations")
+    
+    try:
+        invitation = db.query(DBUserInvitation).filter(
+            DBUserInvitation.id == invitation_id,
+            DBUserInvitation.company_id == current_user.company_id
+        ).first()
+        
+        if not invitation:
+            raise HTTPException(status_code=404, detail="Invitation not found")
+        
+        if invitation.accepted_at:
+            raise HTTPException(status_code=400, detail="Cannot cancel accepted invitation")
+        
+        db.delete(invitation)
+        db.commit()
+        
+        return {"success": True, "message": "Invitation cancelled"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error cancelling invitation: {e}")
+        raise HTTPException(status_code=500, detail="Error cancelling invitation")
+
+
+@app.post("/api/invitations/accept", response_model=AcceptInvitationResponse, tags=["Auth"])
+async def accept_invitation(
+    data: AcceptInvitationRequest,
+    db: Session = Depends(get_db)
+):
+    """Accept an invitation and create user account."""
+    if not DB_AVAILABLE or not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    try:
+        # Get invitation by token
+        invitation = db.query(DBUserInvitation).filter(
+            DBUserInvitation.token == data.token
+        ).first()
+        
+        if not invitation:
+            return AcceptInvitationResponse(
+                success=False,
+                message="Invalid or expired invitation"
+            )
+        
+        # Check if expired
+        if invitation.expires_at < datetime.utcnow():
+            return AcceptInvitationResponse(
+                success=False,
+                message="Invitation has expired"
+            )
+        
+        # Check if already accepted
+        if invitation.accepted_at:
+            return AcceptInvitationResponse(
+                success=False,
+                message="Invitation already accepted"
+            )
+        
+        # Check if email already exists
+        existing_user = db.query(DBUser).filter(DBUser.email == invitation.email).first()
+        if existing_user:
+            return AcceptInvitationResponse(
+                success=False,
+                message="Email already registered"
+            )
+        
+        # Hash password
+        password_hash = hash_password(data.password)
+        
+        # Create user
+        new_user = DBUser(
+            company_id=invitation.company_id,
+            email=invitation.email,
+            name=data.name,
+            password_hash=password_hash,
+            role=invitation.role,
+            email_verified=True
+        )
+        
+        db.add(new_user)
+        db.flush()
+        
+        # Mark invitation as accepted
+        invitation.accepted_at = datetime.utcnow()
+        db.add(invitation)
+        
+        db.commit()
+        db.refresh(new_user)
+        
+        user_response = UserResponse(
+            id=new_user.id,
+            email=new_user.email,
+            name=new_user.name,
+            role=UserRole[new_user.role.value] if hasattr(new_user.role, 'value') else new_user.role,
+            created_at=new_user.created_at,
+            company_id=new_user.company_id
+        )
+        
+        return AcceptInvitationResponse(
+            success=True,
+            message="Account created successfully",
+            user=user_response
+        )
+    except Exception as e:
+        logger.error(f"Error accepting invitation: {e}")
+        return AcceptInvitationResponse(
+            success=False,
+            message=f"Error creating account: {str(e)}"
+        )
+
+
+@app.get("/api/invitations/validate/{token}", tags=["Auth"])
+async def validate_invitation(
+    token: str,
+    db: Session = Depends(get_db)
+):
+    """Validate an invitation token and return invitation details."""
+    if not DB_AVAILABLE or not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    try:
+        invitation = db.query(DBUserInvitation).filter(
+            DBUserInvitation.token == token
+        ).first()
+        
+        if not invitation:
+            return {"valid": False, "message": "Invalid token"}
+        
+        # Check if expired
+        if invitation.expires_at < datetime.utcnow():
+            return {"valid": False, "message": "Invitation has expired"}
+        
+        # Check if already accepted
+        if invitation.accepted_at:
+            return {"valid": False, "message": "Invitation already accepted"}
+        
+        return {
+            "valid": True,
+            "email": invitation.email,
+            "role": invitation.role.value if hasattr(invitation.role, 'value') else invitation.role,
+            "company_id": invitation.company_id,
+            "expires_at": invitation.expires_at.isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error validating invitation: {e}")
+        raise HTTPException(status_code=500, detail="Error validating invitation")
 
 
 # =============================================================================
