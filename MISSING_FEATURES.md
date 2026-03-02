@@ -434,9 +434,9 @@ CREATE TABLE message_logs (
 
 ---
 
-### 2. Email Notification Triggers - PAYMENT RECEIVED
+### 2. Email Notification Triggers
 **Status:** ✅ PARTIALLY IMPLEMENTED  
-**Description:** Email notifications for payment confirmations now implemented
+**Description:** Email notifications for payment confirmations implemented; job/invoice triggers via SMS now implemented (email versions still pending)
 **Impact:** MEDIUM - Business workflow  
 **Location:** `backend/services/email_service.py`, `backend/api/main.py`
 
@@ -444,7 +444,10 @@ CREATE TABLE message_logs (
 - ✅ Payment received → Payment confirmation email sent via `/api/payment/notify` webhook
 - ✅ Payment failed → Payment failure notification email sent
 - ✅ Payment reminder → Email service provides sendPaymentReminder method
-- ⚠️ Email service methods created but other job/invoice triggers still pending
+- ✅ Job created → SMS notification sent (see SMS/WhatsApp section)
+- ✅ Job status changes → SMS notifications sent (see SMS/WhatsApp section)
+- ✅ Invoice created → SMS notification sent (see SMS/WhatsApp section)
+- ✅ Appointment created → SMS notification sent (see SMS/WhatsApp section)
 
 **Implementation Details:**
 - Created `backend/services/email_service.py` with async email sending
@@ -452,14 +455,19 @@ CREATE TABLE message_logs (
 - Sends emails asynchronously (non-blocking) via `asyncio.create_task()`
 - Payment confirmation includes customer name, invoice number, amount, and date
 - Payment failure includes reason code from PayFast
+- Job/Appointment/Invoice notifications now sent via SMS (primary channel for immediate delivery)
 
-**Still Missing:**
-- [ ] Job created → Customer notification
-- [ ] Job status changed → Technician + customer notification
-- [ ] Invoice generated → Customer email + PDF
-- [ ] Quote accepted → Job creation confirmation
-- [ ] Appointment reminder → 24 hours before
+**Still Missing (Email Versions):**
+- [ ] Job created → Customer email notification (SMS version ✅ implemented)
+- [ ] Job status changed → Email notification (SMS version ✅ implemented)
+- [ ] Invoice generated → Customer email + PDF (SMS version ✅ implemented)
+- [ ] Quote accepted → Job creation confirmation email
+- [ ] Appointment reminder → 24 hours before email reminder (SMS version ✅ implemented)
 - [ ] Warranty expiry → Alert email
+
+**Notes:**
+SMS/WhatsApp messaging provides immediate delivery for all customer notifications. Email versions are lower priority since SMS offers better engagement. Email can be added for additional copies/records if needed.
+
 
 ---
 
