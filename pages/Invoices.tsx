@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { store } from '../services/store';
 import { invoiceService } from '../services/invoiceService';
+import { invoicePaymentService } from '../services/invoicePaymentService';
 import { Pagination, paginate } from '../components/Pagination';
 import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
@@ -8,7 +9,8 @@ import { PDFService } from '../services/pdf';
 import { emailService } from '../services/emailService';
 import { messagingService } from '../services/messagingService';
 import { payfastService } from '../services/payfastService';
-import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail, SlidersHorizontal } from 'lucide-react';
+import { PaymentHistory } from '../components/PaymentHistory';
+import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail, SlidersHorizontal, RefreshCw, AlertCircle } from 'lucide-react';
 import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer, CompanyProfile } from '../types';
 import { companyProfile as companyProfileService } from '../services/companyProfile';
 
@@ -30,6 +32,10 @@ export const Sales: React.FC = () => {
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [viewingDoc, setViewingDoc] = useState<Invoice | null>(null);
+  const [viewModalTab, setViewModalTab] = useState<'preview' | 'history' | 'actions'>('preview');
+  const [reminderLoading, setReminderLoading] = useState(false);
+  const [refundLoading, setRefundLoading] = useState(false );
+  const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Dropdown menu state
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
@@ -267,6 +273,83 @@ export const Sales: React.FC = () => {
 
   const handlePrint = () => {
     window.print();
+  };
+
+  const handleSendReminder = async () => {
+    if (!viewingDoc) return;
+    
+    setReminderLoading(true);
+    try {
+      const result = await invoicePaymentService.sendPaymentReminder(viewingDoc.id);
+      
+      if (result.success) {
+        let message = 'Reminder sent successfully';
+        if (result.email_sent && result.sms_sent) {
+          message = 'Reminder sent via email and SMS';
+        } else if (result.email_sent) {
+          message = 'Reminder sent via email';
+        } else if (result.sms_sent) {
+          message = 'Reminder sent via SMS';
+        }
+        setToastMessage({ text: message, type: 'success' });
+        setTimeout(() => setToastMessage(null), 3000);
+      } else {
+        setToastMessage({ 
+          text: result.message || 'Failed to send reminder', 
+          type: 'error' 
+        });
+      }
+    } catch (error) {
+      setToastMessage({ 
+        text: error instanceof Error ? error.message : 'Failed to send reminder', 
+        type: 'error' 
+      });
+    } finally {
+      setReminderLoading(false);
+    }
+  };
+
+  const handleRefundPayment = async () => {
+    if (!viewingDoc) return;
+    
+    const refundReason = prompt(
+      'Enter refund reason (optional):',
+      'Customer requested refund'
+    );
+    if (refundReason === null) return; // User cancelled
+    
+    setRefundLoading(true);
+    try {
+      const result = await invoicePaymentService.refundPayment(
+        viewingDoc.id,
+        viewingDoc.total,
+        refundReason || undefined
+      );
+      
+      if (result.success) {
+        setToastMessage({ 
+          text: 'Payment refunded successfully', 
+          type: 'success' 
+        });
+        setTimeout(() => {
+          setViewingDoc(null);
+          refreshData();
+          setToastMessage(null);
+        }, 2000);
+      } else {
+        setToastMessage({ 
+          text: result.message || 'Failed to refund payment', 
+          type: 'error' 
+        });
+      }
+    } catch (error) {
+      setToastMessage({ 
+        text: error instanceof Error ? error.message : 'Failed to refund payment', 
+        type: 'error' 
+      });
+    } finally {
+      setRefundLoading(false);
+    }
   };
 
   const handleAddItem = () => {
@@ -1044,28 +1127,58 @@ export const Sales: React.FC = () => {
       {viewingDoc && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-70 backdrop-blur-sm">
           <div className="bg-gray-100 rounded-lg max-h-[95vh] overflow-hidden flex flex-col w-full max-w-5xl">
-            {/* Toolbar */}
+            {/* Toolbar with Tabs */}
             <div className="bg-gray-800 text-white px-6 py-3 flex justify-between items-center shadow-lg shrink-0 print:hidden">
               <div className="flex items-center gap-4">
                 <h3 className="font-bold text-lg">{viewingDoc.type} Preview</h3>
                 <span className="text-gray-400 text-sm">{viewingDoc.number}</span>
               </div>
-              <div className="flex items-center gap-3">
-                <button onClick={() => viewingDoc && handleDownloadPDF(viewingDoc)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded flex items-center gap-2 transition-colors">
-                  <Download size={18} /> Download PDF
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setViewModalTab('preview')}
+                  className={`px-3 py-2 rounded text-sm font-medium transition ${
+                    viewModalTab === 'preview'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Preview
                 </button>
-                <button onClick={handlePrint} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded flex items-center gap-2 transition-colors">
-                  <Printer size={18} /> Print
+                <button
+                  onClick={() => setViewModalTab('history')}
+                  className={`px-3 py-2 rounded text-sm font-medium transition ${
+                    viewModalTab === 'history'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Payment History
                 </button>
-                <button onClick={() => setViewingDoc(null)} className="text-gray-400 hover:text-white p-2">
-                  <X size={24} />
+                <button
+                  onClick={() => setViewModalTab('actions')}
+                  className={`px-3 py-2 rounded text-sm font-medium transition ${
+                    viewModalTab === 'actions'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                  }`}
+                >
+                  Actions
                 </button>
               </div>
             </div>
 
-            {/* Document Preview (Printable Area) */}
+            {/* Toast Message */}
+            {toastMessage && (
+              <div className={`px-6 py-3 ${toastMessage.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                <p className="text-sm font-medium">{toastMessage.text}</p>
+              </div>
+            )}
+
+            {/* Modal Content - Tab based */}
             <div className="flex-1 overflow-y-auto p-8 flex justify-center bg-gray-200">
-              <div id="invoice-print-area" className="bg-white shadow-2xl w-[210mm] min-h-[297mm] p-[15mm] relative text-gray-800">
+              {/* Preview Tab */}
+              {viewModalTab === 'preview' && (
+                <div id="invoice-print-area" className="bg-white shadow-2xl w-[210mm] min-h-[297mm] p-[15mm] relative text-gray-800">
 
                 {/* Header */}
                 <div className="flex justify-between items-start mb-10 pb-6 border-b-2 border-gray-100">
@@ -1202,7 +1315,120 @@ export const Sales: React.FC = () => {
                 </div>
 
               </div>
+              )}
+
+              {/* Payment History Tab */}
+              {viewModalTab === 'history' && (
+                <div className="w-full max-w-2xl bg-white rounded-lg shadow-sm p-6">
+                  <PaymentHistory invoiceId={viewingDoc.id} />
+                </div>
+              )}
+
+              {/* Actions Tab */}
+              {viewModalTab === 'actions' && (
+                <div className="w-full max-w-2xl bg-white rounded-lg shadow-sm p-6">
+                  <h3 className="text-lg font-bold text-gray-900 mb-6">Invoice Actions</h3>
+                  <div className="space-y-4">
+                    {/* Download PDF Button */}
+                    <button
+                      onClick={() => viewingDoc && handleDownloadPDF(viewingDoc)}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-3 rounded flex items-center gap-3 transition-colors font-medium"
+                    >
+                      <Download size={20} />
+                      Download PDF
+                    </button>
+
+                    {/* Print Button */}
+                    <button
+                      onClick={handlePrint}
+                      className="w-full bg-gray-600 hover:bg-gray-700 text-white px-4 py-3 rounded flex items-center gap-3 transition-colors font-medium"
+                    >
+                      <Printer size={20} />
+                      Print
+                    </button>
+
+                    {/* Send Reminder Button */}
+                    <button
+                      onClick={handleSendReminder}
+                      disabled={reminderLoading}
+                      className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-3 rounded flex items-center justify-center gap-3 transition-colors font-medium"
+                    >
+                      {reminderLoading ? (
+                        <>
+                          <Loader2 size={20} className="animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Mail size={20} />
+                          Send Payment Reminder
+                        </>
+                      )}
+                    </button>
+
+                    {/* Refund Button */}
+                    {viewingDoc.status === 'Paid' && (
+                      <button
+                        onClick={handleRefundPayment}
+                        disabled={refundLoading}
+                        className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-3 rounded flex items-center justify-center gap-3 transition-colors font-medium"
+                      >
+                        {refundLoading ? (
+                          <>
+                            <Loader2 size={20} className="animate-spin" />
+                            Processing...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw size={20} />
+                            Refund Payment
+                          </>
+                        )}
+                      </button>
+                    )}
+
+                    {/* Info Box */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mt-6">
+                      <div className="flex gap-3">
+                        <AlertCircle className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                        <div className="text-sm text-blue-900">
+                          <p className="font-semibold">Invoice Details</p>
+                          <p className="mt-1">Status: <span className="font-bold">{viewingDoc.status}</span></p>
+                          <p>Amount: <span className="font-bold">R{viewingDoc.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span></p>
+                          <p>Due Date: <span className="font-bold">{new Date(viewingDoc.dueDate).toLocaleDateString()}</span></p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
+
+            {/* Footer with action buttons - only in preview mode */}
+            {viewModalTab === 'preview' && (
+              <div className="bg-gray-800 text-white px-6 py-3 flex justify-between items-center shadow-lg shrink-0 print:hidden">
+                <div></div>
+                <div className="flex items-center gap-3">
+                  <button onClick={() => viewingDoc && handleDownloadPDF(viewingDoc)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded flex items-center gap-2 transition-colors">
+                    <Download size={18} /> Download PDF
+                  </button>
+                  <button onClick={handlePrint} className="bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded flex items-center gap-2 transition-colors">
+                    <Printer size={18} /> Print
+                  </button>
+                  <button onClick={() => setViewingDoc(null)} className="text-gray-400 hover:text-white p-2">
+                    <X size={24} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {viewModalTab !== 'preview' && (
+              <div className="bg-gray-800 text-white px-6 py-3 flex justify-end shadow-lg shrink-0">
+                <button onClick={() => setViewingDoc(null)} className="text-gray-400 hover:text-white p-2">
+                  <X size={24} />
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

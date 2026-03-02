@@ -4,6 +4,8 @@ import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Button } from '../components/ui/Button';
 import { ApiCall } from '../services/api';
+import { invoicePaymentService } from '../services/invoicePaymentService';
+import { Mail, Loader2 } from 'lucide-react';
 
 interface AgingInvoice {
   id: string;
@@ -37,6 +39,7 @@ export default function InvoiceAging() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'days_overdue' | 'amount'>('days_overdue');
+  const [reminderLoading, setReminderLoading] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAgingReport();
@@ -59,6 +62,23 @@ export default function InvoiceAging() {
       console.error('Error fetching aging report:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSendReminder = async (invoiceId: string) => {
+    setReminderLoading(invoiceId);
+    try {
+      const result = await invoicePaymentService.sendPaymentReminder(invoiceId);
+      if (result.success) {
+        alert('Reminder sent successfully!');
+      } else {
+        alert(`Failed to send reminder: ${result.message}`);
+      }
+    } catch (error) {
+      console.error('Error sending reminder:', error);
+      alert('Failed to send payment reminder');
+    } finally {
+      setReminderLoading(null);
     }
   };
 
@@ -238,6 +258,9 @@ export default function InvoiceAging() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
                   Status
                 </th>
+                <th className="px-6 py-3 text-center text-xs font-medium text-gray-700 uppercase tracking-wider">
+                  Action
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -269,6 +292,25 @@ export default function InvoiceAging() {
                     <span className="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
                       {invoice.status}
                     </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-center">
+                    <button
+                      onClick={() => handleSendReminder(invoice.id)}
+                      disabled={reminderLoading === invoice.id}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded md bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-medium transition-colors"
+                    >
+                      {reminderLoading === invoice.id ? (
+                        <>
+                          <Loader2 size={14} className="animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Mail size={14} />
+                          Send Reminder
+                        </>
+                      )}
+                    </button>
                   </td>
                 </tr>
               ))}

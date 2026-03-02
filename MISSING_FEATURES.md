@@ -3,7 +3,14 @@
 **Last Updated:** February 28, 2026  
 **Status:** Active Development - Multi-Tenant Workshop Management System
 
-**Recent Update (Feb 28, 2026):** Implemented 5 features:
+**Recent Update (Mar 2, 2026):** Implemented frontend integration for payment tracking:
+- ✅ Payment history tab in invoice detail page (modal with tabs)
+- ✅ Refund button in invoice detail with confirmation workflow
+- ✅ "Send Reminder" button in invoice aging report
+- ✅ Payment method selector component for checkout
+- ✅ Payment checkout modal with method selection
+
+**Previous Update (Feb 28, 2026):** Implemented 5 features:
 - ✅ Email payment confirmations on PayFast webhook
 - ✅ SMS payment notifications (Twilio integration)
 - ✅ Payment retry logic with exponential backoff
@@ -256,10 +263,20 @@ POST /api/payment/refund                      - Mark payment as refunded/cancell
 POST /api/invoices/{invoice_id}/reminder      - Send email/SMS payment reminder
 ```
 
-**Frontend Integration Needed:**
-- [ ] Payment history UI in invoice detail page
-- [ ] Refund button with confirmation workflow
-- [ ] Send reminder button in analytics/aging report
+**Frontend Integration (COMPLETED):**
+- [x] Payment history tab in invoice detail page - Shows transaction list with status and amounts
+- [x] Refund button with integration - Marks payment as refunded with reason tracking
+- [x] "Send Reminder" button in aging report - One-click reminder dispatch to email/SMS
+- [x] Payment checkout modal - Complete payment method selection UI
+- [x] Payment method selector component - Radio-button selector with method-specific info
+
+**Frontend Components:**
+- [components/PaymentHistory.tsx](components/PaymentHistory.tsx) - Payment transaction list component
+- [components/PaymentMethodSelector.tsx](components/PaymentMethodSelector.tsx) - Payment method selection
+- [components/PaymentCheckout.tsx](components/PaymentCheckout.tsx) - Checkout modal with method selection
+- [services/invoicePaymentService.ts](services/invoicePaymentService.ts) - Frontend API service
+- [pages/Invoices.tsx](pages/Invoices.tsx) - Updated with payment tabs (preview, history, actions)
+- [pages/InvoiceAging.tsx](pages/InvoiceAging.tsx) - Updated with send reminder button per invoice
 
 ---
 
