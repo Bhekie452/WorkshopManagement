@@ -12,7 +12,7 @@ This module provides RESTful API endpoints for:
 - Analytics & Reporting
 """
 
-from fastapi import FastAPI, HTTPException, Depends, status, Query
+from fastapi import FastAPI, HTTPException, Depends, status, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr, Field
@@ -24,6 +24,7 @@ import os
 import hashlib
 import hmac
 import secrets
+import logging
 from pathlib import Path
 import sys
 
@@ -35,13 +36,22 @@ from ml.ev_rul_model import get_model, EVBatteryRULModel
 # Voice router
 from api.voice import router as voice_router
 
+# PayFast payment service
+from api.payfast import payfast_service
+
+# Email and SMS services
+from services.email_service import email_service
+from services.sms_service import sms_service
+
 # Database imports (optional — falls back to in-memory if unavailable)
 try:
     from sqlalchemy.orm import Session
-    from db.database import get_db, engine, SessionLocal
+    from db.database import get_db, get_db_context, engine, SessionLocal
     from db.models import (
         Base, Customer as DBCustomer, Vehicle as DBVehicle,
         Job as DBJob, Part as DBPart, Invoice as DBInvoice, User as DBUser,
+        InvoiceItem as DBInvoiceItem, PaymentTransaction as DBPaymentTransaction,
+        Company as DBCompany,
     )
     # Use SQLite fallback if PostgreSQL not available
     DB_URL = os.getenv("DATABASE_URL", "")
@@ -89,6 +99,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # OAuth2 for JWT authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
@@ -272,6 +289,12 @@ class JobTask(BaseModel):
     completed: bool = False
 
 
+class JobPartUpdate(BaseModel):
+    quantity: Optional[int] = None
+    unitCost: Optional[float] = None
+    name: Optional[str] = None
+
+
 class JobBase(BaseModel):
     customer_id: str
     vehicle_id: str
@@ -347,6 +370,18 @@ class InvoiceItem(BaseModel):
     total: float
 
 
+class InvoiceItemCreate(BaseModel):
+    description: str
+    quantity: int
+    unit_price: float
+
+
+class InvoiceItemUpdate(BaseModel):
+    description: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price: Optional[float] = None
+
+
 class InvoiceBase(BaseModel):
     type: str = "Invoice"  # Invoice or Quote
     customer_id: str
@@ -372,6 +407,58 @@ class InvoiceResponse(InvoiceBase):
 
     class Config:
         from_attributes = True
+
+
+# --- Payments ---
+class PaymentCreateRequest(BaseModel):
+    invoice_id: str
+    return_url: str = ""
+    cancel_url: str = ""
+    notify_url: str = ""
+
+
+class PaymentRetryRequest(BaseModel):
+    payment_id: str
+
+
+class PaymentNotifyRequest(BaseModel):
+    m_payment_id: str
+    pf_payment_id: str
+    pf_amount: str
+    pf_payment_status: str
+    pf_signature: str
+    reference: Optional[str] = None
+    reason_code: Optional[str] = None
+    amount_gross: Optional[str] = None
+    amount_fee: Optional[str] = None
+    amount_net: Optional[str] = None
+    custom_str1: Optional[str] = None
+    custom_str2: Optional[str] = None
+    payment_method: Optional[str] = None
+    email_address: Optional[str] = None
+
+
+class PaymentResponse(BaseModel):
+    id: str
+    invoice_id: str
+    payment_id: str
+    pf_payment_id: Optional[str]
+    amount:float
+    status: str
+    initiated_at: datetime
+    completed_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+
+class PaymentVerifyResponse(BaseModel):
+    invoice_id: str
+    status: str
+    amount: float
+    payment_id: str
+    pf_payment_id: Optional[str]
+    completed_at: Optional[datetime]
 
 
 # --- Appointments ---
@@ -561,6 +648,24 @@ class DashboardStats(BaseModel):
     low_stock_count: int
 
 
+class InvoiceAgeGroup(BaseModel):
+    """Age group for invoice aging report."""
+    label: str  # e.g., "0-30 days", "31-60 days"
+    min_days: int
+    max_days: int
+    count: int
+    total_amount: float
+
+
+class InvoiceAgingReport(BaseModel):
+    """Invoice aging report showing overdue invoice analysis."""
+    generated_at: datetime
+    total_overdue_amount: float
+    total_overdue_count: int
+    age_groups: List[InvoiceAgeGroup]
+    invoices: List[Dict[str, Any]]  # Detailed invoices list
+
+
 # =============================================================================
 # In-Memory Data Store (Fallback when DB not available)
 # =============================================================================
@@ -577,6 +682,7 @@ _warranties: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _attachments: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _labor_entries: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _mileage_records: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
+_invoice_items: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 
 
 # JWT Secret (generate per-instance if not configured)
@@ -994,6 +1100,36 @@ async def update_job_task(job_id: str, task_id: str, completed: bool, current_us
     return JobResponse(**job)
 
 
+@app.patch("/api/jobs/{job_id}/parts/{part_usage_id}", response_model=JobResponse, tags=["Jobs"])
+async def update_job_part(job_id: str, part_usage_id: str, update: JobPartUpdate, current_user: UserResponse = Depends(get_current_user)):
+    """Update a part usage on a job (quantity/unit cost/name)."""
+    job = _jobs.get(job_id)
+    if not job or job.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    parts = job.setdefault("partsUsed", [])
+    part_item = next((p for p in parts if p.get("id") == part_usage_id), None)
+    if not part_item:
+        raise HTTPException(status_code=404, detail="Part usage not found on job")
+
+    old_total = part_item.get("totalCost", part_item.get("quantity", 0) * part_item.get("unitCost", 0))
+    update_data = update.model_dump(exclude_unset=True)
+    if "quantity" in update_data:
+        part_item["quantity"] = update_data["quantity"]
+    if "unitCost" in update_data:
+        part_item["unitCost"] = update_data["unitCost"]
+    if "name" in update_data:
+        part_item["name"] = update_data["name"]
+
+    part_item["totalCost"] = part_item.get("quantity", 0) * part_item.get("unitCost", 0)
+
+    # Adjust job estimated_cost by delta
+    new_total = part_item["totalCost"]
+    job["estimated_cost"] = job.get("estimated_cost", 0) + (new_total - old_total)
+
+    return JobResponse(**job)
+
+
 # =============================================================================
 # Parts/Inventory Endpoints
 # =============================================================================
@@ -1078,6 +1214,28 @@ async def adjust_stock(part_id: str, quantity: int, reason: str, current_user: U
     return PartResponse(**_parts[part_id])
 
 
+@app.get("/api/parts/low-stock", response_model=List[PartResponse], tags=["Inventory"])
+async def list_low_stock_parts(current_user: UserResponse = Depends(get_current_user)):
+    """List parts that are below or at their minimum level for the current user's company."""
+    company_id = current_user.company_id
+    parts = [p for p in _parts.values() if p.get("company_id") == company_id]
+    low = [p for p in parts if p.get("quantity", 0) <= p.get("min_level", 0)]
+    for p in low:
+        p["is_low_stock"] = p.get("quantity", 0) <= p.get("min_level", 0)
+    return [PartResponse(**p) for p in low]
+
+
+@app.delete("/api/parts/{part_id}", status_code=204, tags=["Inventory"])
+async def delete_part(part_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete a part if it belongs to the current user's company."""
+    if part_id not in _parts:
+        raise HTTPException(status_code=404, detail="Part not found")
+    part = _parts[part_id]
+    if part.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Part not found")
+    del _parts[part_id]
+
+
 # =============================================================================
 # Invoices/Quotes Endpoints
 # =============================================================================
@@ -1151,6 +1309,209 @@ async def update_invoice_status(invoice_id: str, status: InvoiceStatus, current_
     
     inv["status"] = status
     return InvoiceResponse(**inv)
+
+
+@app.get("/api/invoices/{invoice_id}/items", response_model=List[InvoiceItem], tags=["Invoices"])
+async def list_invoice_items(invoice_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """List items for a specific invoice if it belongs to the user's company."""
+    # Prefer persistent DB when available
+    if DB_AVAILABLE:
+        from db.database import get_db_context
+        from db.models import InvoiceItem as DBInvoiceItem, Invoice as DBInvoice
+        with get_db_context() as db:
+            db_inv = db.query(DBInvoice).filter(DBInvoice.id == invoice_id, DBInvoice.company_id == current_user.company_id).first()
+            if db_inv:
+                items = db.query(DBInvoiceItem).filter(DBInvoiceItem.invoice_id == invoice_id).all()
+                return [InvoiceItem(id=i.id, description=i.description, quantity=i.quantity, unit_price=i.unit_price, total=i.total) for i in items]
+            # Fall back to in-memory if DB invoice not found
+
+    inv = _invoices.get(invoice_id)
+    if not inv or inv.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    company_id = current_user.company_id
+    if company_id not in _invoice_items:
+        return []
+
+    items = [i for i in _invoice_items[company_id].values() if i.get("invoice_id") == invoice_id]
+    return [InvoiceItem(**i) for i in items]
+
+
+@app.post("/api/invoices/{invoice_id}/items", response_model=InvoiceItem, status_code=201, tags=["Invoices"])
+async def create_invoice_item(invoice_id: str, item: InvoiceItemCreate, current_user: UserResponse = Depends(get_current_user)):
+    """Add an item to an existing invoice and recalculate totals."""
+    inv = _invoices.get(invoice_id)
+    if not inv or inv.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    company_id = current_user.company_id
+    item_id = str(uuid.uuid4())
+    total = item.quantity * item.unit_price
+    item_data = {
+        "id": item_id,
+        "invoice_id": invoice_id,
+        "description": item.description,
+        "quantity": item.quantity,
+        "unit_price": item.unit_price,
+        "total": total,
+    }
+
+    if company_id not in _invoice_items:
+        _invoice_items[company_id] = {}
+
+    _invoice_items[company_id][item_id] = item_data
+
+    # Persistent DB path
+    if DB_AVAILABLE:
+        from db.database import get_db_context
+        from db.models import InvoiceItem as DBInvoiceItem, Invoice as DBInvoice
+        with get_db_context() as db:
+            db_inv = db.query(DBInvoice).filter(DBInvoice.id == invoice_id, DBInvoice.company_id == current_user.company_id).first()
+            if db_inv:
+                db_item = DBInvoiceItem(invoice_id=invoice_id, description=item.description, quantity=item.quantity, unit_price=item.unit_price, total=item.quantity * item.unit_price)
+                db.add(db_item)
+                db.commit()
+                db.refresh(db_item)
+
+                # Recalculate totals from DB items
+                items = db.query(DBInvoiceItem).filter(DBInvoiceItem.invoice_id == invoice_id).all()
+                subtotal = sum(i.total for i in items)
+                db_inv.subtotal = subtotal
+                db_inv.tax_amount = subtotal * db_inv.tax_rate
+                db_inv.total = db_inv.subtotal + db_inv.tax_amount - getattr(db_inv, 'discount', 0)
+                db.commit()
+
+                return InvoiceItem(id=db_item.id, description=db_item.description, quantity=db_item.quantity, unit_price=db_item.unit_price, total=db_item.total)
+            # Fall back to in-memory if DB invoice not found
+
+    # In-memory fallback
+    items = [i for i in _invoice_items[company_id].values() if i.get("invoice_id") == invoice_id]
+    subtotal = sum(i.get("total", 0) for i in items)
+    inv["subtotal"] = subtotal
+    inv["tax_amount"] = subtotal * 0.15
+    inv["total"] = inv["subtotal"] + inv["tax_amount"]
+
+    return InvoiceItem(**item_data)
+
+
+
+@app.patch("/api/invoices/{invoice_id}/items/{item_id}", response_model=InvoiceItem, tags=["Invoices"])
+async def update_invoice_item(invoice_id: str, item_id: str, item: InvoiceItemUpdate, current_user: UserResponse = Depends(get_current_user)):
+    """Update an invoice item and recalculate invoice totals."""
+    # Use DB when available
+    if DB_AVAILABLE:
+        from db.database import get_db_context
+        from db.models import InvoiceItem as DBInvoiceItem, Invoice as DBInvoice
+        with get_db_context() as db:
+            db_inv = db.query(DBInvoice).filter(DBInvoice.id == invoice_id, DBInvoice.company_id == current_user.company_id).first()
+            if db_inv:
+                db_item = db.query(DBInvoiceItem).filter(DBInvoiceItem.id == item_id, DBInvoiceItem.invoice_id == invoice_id).first()
+                if not db_item:
+                    raise HTTPException(status_code=404, detail="Item not found")
+
+                if item.description is not None:
+                    db_item.description = item.description
+                if item.quantity is not None:
+                    db_item.quantity = item.quantity
+                if item.unit_price is not None:
+                    db_item.unit_price = item.unit_price
+
+                db_item.total = (db_item.quantity or 0) * (db_item.unit_price or 0)
+                db.commit()
+
+                items = db.query(DBInvoiceItem).filter(DBInvoiceItem.invoice_id == invoice_id).all()
+                subtotal = sum(i.total for i in items)
+                db_inv.subtotal = subtotal
+                db_inv.tax_amount = subtotal * db_inv.tax_rate
+                db_inv.total = db_inv.subtotal + db_inv.tax_amount - getattr(db_inv, 'discount', 0)
+                db.commit()
+
+                return InvoiceItem(id=db_item.id, description=db_item.description, quantity=db_item.quantity, unit_price=db_item.unit_price, total=db_item.total)
+            # fall back to in-memory
+
+    # In-memory fallback
+    inv = _invoices.get(invoice_id)
+    if not inv or inv.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    company_id = current_user.company_id
+    if company_id not in _invoice_items or item_id not in _invoice_items[company_id]:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    item_data = _invoice_items[company_id][item_id]
+    if item_data.get("invoice_id") != invoice_id:
+        raise HTTPException(status_code=404, detail="Item not found for this invoice")
+
+    # Update fields
+    if item.description is not None:
+        item_data["description"] = item.description
+    if item.quantity is not None:
+        item_data["quantity"] = item.quantity
+    if item.unit_price is not None:
+        item_data["unit_price"] = item.unit_price
+
+    # Recalculate item total
+    item_data["total"] = item_data.get("quantity", 0) * item_data.get("unit_price", 0)
+
+    # Recalculate invoice totals
+    items = [i for i in _invoice_items[company_id].values() if i.get("invoice_id") == invoice_id]
+    subtotal = sum(i.get("total", 0) for i in items)
+    inv["subtotal"] = subtotal
+    inv["tax_amount"] = subtotal * 0.15
+    inv["total"] = inv["subtotal"] + inv["tax_amount"]
+
+    return InvoiceItem(**item_data)
+
+
+@app.delete("/api/invoices/{invoice_id}/items/{item_id}", status_code=204, tags=["Invoices"])
+async def delete_invoice_item(invoice_id: str, item_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Delete an invoice item and recalculate invoice totals."""
+    # Use DB when available
+    if DB_AVAILABLE:
+        from db.database import get_db_context
+        from db.models import InvoiceItem as DBInvoiceItem, Invoice as DBInvoice
+        with get_db_context() as db:
+            db_inv = db.query(DBInvoice).filter(DBInvoice.id == invoice_id, DBInvoice.company_id == current_user.company_id).first()
+            if db_inv:
+                db_item = db.query(DBInvoiceItem).filter(DBInvoiceItem.id == item_id, DBInvoiceItem.invoice_id == invoice_id).first()
+                if not db_item:
+                    raise HTTPException(status_code=404, detail="Item not found")
+
+                db.delete(db_item)
+                db.commit()
+
+                items = db.query(DBInvoiceItem).filter(DBInvoiceItem.invoice_id == invoice_id).all()
+                subtotal = sum(i.total for i in items)
+                db_inv.subtotal = subtotal
+                db_inv.tax_amount = subtotal * db_inv.tax_rate
+                db_inv.total = db_inv.subtotal + db_inv.tax_amount - getattr(db_inv, 'discount', 0)
+                db.commit()
+                return
+            # fall back to in-memory
+
+    inv = _invoices.get(invoice_id)
+    if not inv or inv.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    company_id = current_user.company_id
+    if company_id not in _invoice_items or item_id not in _invoice_items[company_id]:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    item_data = _invoice_items[company_id][item_id]
+    if item_data.get("invoice_id") != invoice_id:
+        raise HTTPException(status_code=404, detail="Item not found for this invoice")
+
+    # Remove the item
+    del _invoice_items[company_id][item_id]
+
+    # Recalculate invoice totals
+    items = [i for i in _invoice_items[company_id].values() if i.get("invoice_id") == invoice_id]
+    subtotal = sum(i.get("total", 0) for i in items)
+    inv["subtotal"] = subtotal
+    inv["tax_amount"] = subtotal * 0.15
+    inv["total"] = inv["subtotal"] + inv["tax_amount"]
+
+    return
 
 
 # =============================================================================
@@ -1623,6 +1984,605 @@ async def get_model_info():
 
 
 # =============================================================================
+# Payment Processing Helpers
+# =============================================================================
+
+def calculate_retry_delay(retry_count: int) -> timedelta:
+    """
+    Calculate exponential backoff delay for payment retries.
+    
+    Retry schedule:
+    - 1st retry (count=1): 1 hour
+    - 2nd retry (count=2): 4 hours  
+    - 3rd retry (count=3): 1 day
+    - 4th+ retry (count=4+): 3 days max
+    
+    Args:
+        retry_count: Number of retries already attempted
+    
+    Returns:
+        timedelta: Delay before next retry attempt
+    """
+    if retry_count <= 0:
+        return timedelta(hours=1)
+    elif retry_count == 1:
+        return timedelta(hours=1)
+    elif retry_count == 2:
+        return timedelta(hours=4)
+    elif retry_count == 3:
+        return timedelta(days=1)
+    else:  # retry_count >= 4
+        return timedelta(days=3)
+
+
+def should_retry_payment(payment_tx) -> bool:
+    """
+    Determine if a failed payment should be retried.
+    
+    Criteria:
+    - Status is 'Failed'
+    - Retry count is less than 5
+    - Sufficient time has passed since last retry
+    
+    Args:
+        payment_tx: PaymentTransaction object
+    
+    Returns:
+        bool: True if payment should be retried
+    """
+    if payment_tx.status != 'Failed':
+        return False
+    
+    if payment_tx.retry_count >= 5:
+        logger.info(f"Payment {payment_tx.id} has exceeded max retries (5)")
+        return False
+    
+    if payment_tx.last_retry_at is None:
+        # First retry
+        return True
+    
+    # Check if enough time has passed
+    delay = calculate_retry_delay(payment_tx.retry_count)
+    time_since_last_retry = datetime.utcnow() - payment_tx.last_retry_at
+    
+    if time_since_last_retry >= delay:
+        return True
+    
+    return False
+
+
+# =============================================================================
+# Payment Processing Endpoints (PayFast)
+# =============================================================================
+
+@app.post("/api/payment/create", response_model=dict, tags=["Payments"])
+async def create_payment(
+    req: PaymentCreateRequest,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Generate PayFast payment URL for an invoice.
+    
+    Returns the PayFast redirect URL that customer should navigate to for payment.
+    """
+    invoice_id = req.invoice_id
+    company_id = current_user.company_id
+    
+    # Get invoice from DB or in-memory store
+    invoice = None
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            invoice = db.query(DBInvoice).filter(DBInvoice.id == invoice_id).first()
+    
+    if not invoice:
+        invoice = _invoices.get(invoice_id, {})
+    
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    
+    # Verify company scoping
+    if invoice.get("company_id") != company_id:
+        raise HTTPException(status_code=403, detail="Unauthorized")
+    
+    # Get customer details
+    customer_id = invoice.get("customer_id")
+    customer = _customers.get(customer_id, {})
+    if not customer:
+        raise HTTPException(status_code=400, detail="Customer information missing")
+    
+    # Generate payment URL from PayFast service
+    payment_url = payfast_service.generate_payment_url(
+        invoice_id=invoice_id,
+        invoice_number=invoice.get("number", invoice_id),
+        amount=float(invoice.get("total", 0)),
+        customer_email=customer.get("email", ""),
+        customer_name=customer.get("name", ""),
+        description=f"Invoice {invoice.get('number')} - Workshop Services",
+        return_url=req.return_url or f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/payment/success",
+        cancel_url=req.cancel_url or f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/payment/cancel",
+        notify_url=req.notify_url or f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/payment/notify",
+    )
+    
+    # Create payment transaction record (if DB available)
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            payment_tx = DBPaymentTransaction(
+                company_id=company_id,
+                invoice_id=invoice_id,
+                payment_id=invoice_id,  # Use invoice ID as payment_id for reference
+                amount=float(invoice.get("total", 0)),
+                status="Pending",
+            )
+            db.add(payment_tx)
+            db.commit()
+    
+    return {
+        "payment_url": payment_url,
+        "invoice_id": invoice_id,
+        "amount": float(invoice.get("total", 0)),
+        "message": "Redirect customer to payment_url to complete payment"
+    }
+
+
+@app.post("/api/payment/notify", status_code=200, tags=["Payments"])
+async def payfast_itn_notify(request: Request):
+    """
+    Handle PayFast Instant Transaction Notification (ITN) webhook.
+    
+    Called by PayFast after payment attempt. Verifies signature and updates invoice status.
+    Sends payment confirmation/failure emails to customer.
+    """
+    import asyncio
+    
+    # Get raw POST data
+    data = await request.form()
+    data_dict = dict(data)
+    
+    # Extract signature
+    signature = data_dict.get('pf_signature', '')
+    
+    # Verify PayFast signature
+    if not payfast_service.verify_webhook_signature(data_dict, signature):
+        logger.warning(f"Invalid PayFast signature for payment {data_dict.get('m_payment_id')}")
+        return {"status": "error", "message": "Signature verification failed"}
+    
+    # Validate ITN data
+    is_valid, error_msg = payfast_service.validate_itn_data(data_dict)
+    if not is_valid:
+        logger.warning(f"Invalid ITN data: {error_msg}")
+        return {"status": "error", "message": error_msg}
+    
+    # Extract key fields
+    invoice_id = data_dict.get('m_payment_id')
+    pf_payment_id = data_dict.get('pf_payment_id')
+    pf_status = data_dict.get('pf_payment_status', '').upper()
+    amount = float(data_dict.get('pf_amount', 0))
+    
+    logger.info(f"PayFast ITN: invoice={invoice_id}, pf_id={pf_payment_id}, status={pf_status}")
+    
+    customer_email = None
+    customer_name = None
+    customer_phone = None
+    invoice_number = None
+    company_name = None
+    
+    # Update payment transaction in DB
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            # Find existing payment transaction
+            payment_tx = db.query(DBPaymentTransaction).filter(
+                DBPaymentTransaction.payment_id == invoice_id
+            ).first()
+            
+            if payment_tx:
+                payment_tx.pf_payment_id = pf_payment_id
+                payment_tx.status = pf_status
+                payment_tx.signature_valid = True
+                payment_tx.signature_hash = signature
+                payment_tx.amount_gross = float(data_dict.get('amount_gross', amount))
+                payment_tx.amount_fee = float(data_dict.get('amount_fee', 0))
+                payment_tx.amount_net = float(data_dict.get('amount_net', 0))
+                payment_tx.payfast_response = data_dict
+                
+                if pf_status == 'COMPLETE':
+                    payment_tx.completed_at = datetime.utcnow()
+                    payment_tx.status = 'Complete'
+                elif pf_status == 'FAILED':
+                    payment_tx.status = 'Failed'
+                    payment_tx.error_message = data_dict.get('reason_code', 'Payment failed')
+                elif pf_status == 'PENDING':
+                    payment_tx.status = 'Pending'
+                
+                db.commit()
+                
+                # Update invoice status if payment complete
+                invoice = db.query(DBInvoice).filter(
+                    DBInvoice.id == invoice_id
+                ).first()
+                
+                if invoice:
+                    # Get customer and company details for notifications
+                    customer = db.query(DBCustomer).filter(
+                        DBCustomer.id == invoice.customer_id
+                    ).first()
+                    
+                    company = db.query(DBCompany).filter(
+                        DBCompany.id == invoice.company_id
+                    ).first()
+                    
+                    if customer:
+                        customer_email = customer.email
+                        customer_name = customer.name
+                        customer_phone = customer.phone
+                        invoice_number = invoice.invoice_number
+                    
+                    if company:
+                        company_name = company.name
+                    
+                    if pf_status == 'COMPLETE':
+                        invoice.status = 'Paid'
+                        invoice.paid_at = datetime.utcnow()
+                        invoice.payment_method = 'PayFast'
+                        db.commit()
+                        
+                        logger.info(f"Invoice {invoice_id} marked as paid via PayFast")
+                    elif pf_status == 'FAILED':
+                        invoice.status = 'Overdue'  # Mark as overdue if payment fails
+                        db.commit()
+                        logger.info(f"Invoice {invoice_id} payment failed, marked as overdue")
+    else:
+        # Update in-memory invoice
+        if invoice_id in _invoices:
+            if pf_status == 'COMPLETE':
+                _invoices[invoice_id]['status'] = InvoiceStatus.PAID
+                _invoices[invoice_id]['paid_at'] = datetime.utcnow()
+                _invoices[invoice_id]['payment_method'] = 'PayFast'
+                invoice_number = _invoices[invoice_id].get('invoice_number')
+    
+    # Send notifications asynchronously (non-blocking)
+    if customer_email and customer_name and invoice_number:
+        async def send_notifications_async():
+            try:
+                if pf_status == 'COMPLETE':
+                    # Send email confirmation
+                    await email_service.send_payment_confirmation(
+                        customer_email=customer_email,
+                        customer_name=customer_name,
+                        invoice_number=invoice_number,
+                        amount=amount,
+                        payment_method='PayFast',
+                        job_id=None
+                    )
+                    
+                    # Send SMS confirmation if phone is available
+                    if customer_phone:
+                        await sms_service.send_payment_confirmation(
+                            customer_phone=customer_phone,
+                            customer_name=customer_name,
+                            invoice_number=invoice_number,
+                            amount=amount,
+                            company_name=company_name or 'Workshop Management System'
+                        )
+                    
+                elif pf_status == 'FAILED':
+                    reason = data_dict.get('reason_code', 'Payment was declined')
+                    
+                    # Send email notification
+                    await email_service.send_payment_failed(
+                        customer_email=customer_email,
+                        customer_name=customer_name,
+                        invoice_number=invoice_number,
+                        amount=amount,
+                        reason=reason
+                    )
+                    
+                    # Send SMS notification if phone is available
+                    if customer_phone:
+                        await sms_service.send_payment_failed(
+                            customer_phone=customer_phone,
+                            customer_name=customer_name,
+                            invoice_number=invoice_number,
+                            amount=amount,
+                            company_name=company_name or 'Workshop Management System'
+                        )
+            except Exception as e:
+                logger.error(f"Failed to send payment notifications: {e}")
+        
+        # Schedule notification sending without blocking webhook response
+        asyncio.create_task(send_notifications_async())
+    
+    return {"status": "success", "message": "ITN processed"}
+
+
+@app.get("/api/payment/verify/{invoice_id}", response_model=PaymentVerifyResponse, tags=["Payments"])
+async def verify_payment(
+    invoice_id: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Verify payment status for an invoice.
+    
+    Returns the current payment status from the payment transaction record.
+    """
+    company_id = current_user.company_id
+    
+    # Get payment transaction from DB
+    payment_tx = None
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            payment_tx = db.query(DBPaymentTransaction).filter(
+                DBPaymentTransaction.invoice_id == invoice_id,
+                DBPaymentTransaction.company_id == company_id
+            ).first()
+    
+    if not payment_tx:
+        raise HTTPException(status_code=404, detail="Payment not found for this invoice")
+    
+    # Get invoice to return final status
+    invoice = _invoices.get(invoice_id, {})
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            db_invoice = db.query(DBInvoice).filter(DBInvoice.id == invoice_id).first()
+            if db_invoice:
+                invoice = {
+                    "id": db_invoice.id,
+                    "status": db_invoice.status.value if hasattr(db_invoice.status, 'value') else str(db_invoice.status),
+                    "total": db_invoice.total,
+                    "paid_at": db_invoice.paid_at,
+                }
+    
+    return PaymentVerifyResponse(
+        invoice_id=invoice_id,
+        status=invoice.get("status", payment_tx.status),
+        amount=payment_tx.amount,
+        payment_id=payment_tx.payment_id,
+        pf_payment_id=payment_tx.pf_payment_id,
+        completed_at=payment_tx.completed_at,
+    )
+
+
+@app.post("/api/payment/retry", response_model=dict, tags=["Payments"])
+async def retry_payment(
+    req: PaymentRetryRequest,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """
+    Retry a failed payment by generating a new PayFast payment URL.
+    
+    Uses exponential backoff to limit retry frequency.
+    Max 5 retry attempts allowed before manual intervention required.
+    """
+
+
+# Additional payment endpoints: history, refund, reminders
+
+
+@app.get("/api/payment/history/{invoice_id}", response_model=List[PaymentResponse], tags=["Payments"])
+async def payment_history(
+    invoice_id: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Return all payment transactions for a given invoice."""
+    company_id = current_user.company_id
+    results = []
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            txs = db.query(DBPaymentTransaction).filter(
+                DBPaymentTransaction.invoice_id == invoice_id,
+                DBPaymentTransaction.company_id == company_id
+            ).order_by(DBPaymentTransaction.created_at.desc()).all()
+            for tx in txs:
+                results.append(PaymentResponse.from_orm(tx))
+    else:
+        for tx in _payment_transactions.values():
+            if tx.get("invoice_id") == invoice_id and tx.get("company_id") == company_id:
+                results.append(PaymentResponse(**tx))
+    return results
+
+
+class PaymentRefundRequest(BaseModel):
+    payment_id: str
+    amount: Optional[float] = None
+    reason: Optional[str] = None
+
+
+@app.post("/api/payment/refund", response_model=dict, tags=["Payments"])
+async def refund_payment(
+    req: PaymentRefundRequest,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Mark a payment transaction as refunded and update invoice status."""
+    company_id = current_user.company_id
+    payment_tx = None
+    invoice = None
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            payment_tx = db.query(DBPaymentTransaction).filter(
+                DBPaymentTransaction.payment_id == req.payment_id,
+                DBPaymentTransaction.company_id == company_id
+            ).first()
+            if not payment_tx:
+                raise HTTPException(status_code=404, detail="Payment not found")
+            
+            # mark as cancelled/refunded
+            payment_tx.status = 'Cancelled'
+            if req.reason:
+                payment_tx.error_message = req.reason
+            payment_tx.payfast_response = payment_tx.payfast_response or {}
+            payment_tx.payfast_response['refund_requested'] = True
+            payment_tx.payfast_response['refund_amount'] = req.amount
+            db.commit()
+            
+            invoice = db.query(DBInvoice).filter(DBInvoice.id == payment_tx.invoice_id).first()
+            if invoice:
+                invoice.status = 'Cancelled'
+                db.commit()
+    else:
+        if req.payment_id in _payment_transactions:
+            tx = _payment_transactions[req.payment_id]
+            tx['status'] = 'Cancelled'
+            if req.reason:
+                tx['error_message'] = req.reason
+            tx.setdefault('payfast_response', {})['refund_requested'] = True
+            invoice = _invoices.get(tx.get('invoice_id'))
+            if invoice:
+                invoice['status'] = InvoiceStatus.CANCELLED
+    
+    return {"status": "success", "message": "Payment marked as refunded/cancelled"}
+
+
+@app.post("/api/invoices/{invoice_id}/reminder", response_model=dict, tags=["Payments"])
+async def send_payment_reminder(
+    invoice_id: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Send payment reminder email/SMS for an overdue invoice."""
+    company_id = current_user.company_id
+    invoice = None
+    customer = None
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            invoice = db.query(DBInvoice).filter(
+                DBInvoice.id == invoice_id,
+                DBInvoice.company_id == company_id
+            ).first()
+            if invoice:
+                customer = db.query(DBCustomer).filter(DBCustomer.id == invoice.customer_id).first()
+    else:
+        invoice = _invoices.get(invoice_id)
+        if invoice and invoice.get('company_id') == company_id:
+            customer = _customers.get(invoice.get('customer_id'))
+    
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    
+    amount = invoice.total if hasattr(invoice, 'total') else invoice.get('total', 0)
+    email_sent = False
+    sms_sent = False
+    
+    # send notifications
+    email_sent = await email_service.send_payment_reminder(
+        customer_email=customer.email,
+        customer_name=customer.name,
+        invoice_number=invoice.invoice_number if hasattr(invoice, 'invoice_number') else invoice.get('invoice_number'),
+        amount=amount,
+        due_date=invoice.due_date.strftime('%Y-%m-%d') if hasattr(invoice, 'due_date') else str(invoice.get('due_date'))
+    )
+    
+    if hasattr(customer, 'phone') and customer.phone:
+        sms_sent = await sms_service.send_payment_reminder(
+            customer_phone=customer.phone,
+            customer_name=customer.name,
+            invoice_number=invoice.invoice_number if hasattr(invoice, 'invoice_number') else invoice.get('invoice_number'),
+            amount=amount,
+            due_date=invoice.due_date.strftime('%Y-%m-%d') if hasattr(invoice, 'due_date') else str(invoice.get('due_date'))
+        )
+    
+    return {"email_sent": email_sent, "sms_sent": sms_sent}
+
+
+# =============================================================================
+
+# Analytics & Dashboard Endpoints
+# =============================================================================
+    payment_id = req.payment_id
+    company_id = current_user.company_id
+    
+    # Get payment transaction from DB
+    payment_tx = None
+    invoice = None
+    customer = None
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            payment_tx = db.query(DBPaymentTransaction).filter(
+                DBPaymentTransaction.payment_id == payment_id,
+                DBPaymentTransaction.company_id == company_id
+            ).first()
+            
+            if not payment_tx:
+                raise HTTPException(status_code=404, detail="Payment not found")
+            
+            # Check if payment can be retried
+            if payment_tx.status != 'Failed':
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot retry payment with status '{payment_tx.status}'. Only failed payments can be retried."
+                )
+            
+            if payment_tx.retry_count >= 5:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Maximum retry attempts (5) exceeded. Please contact support."
+                )
+            
+            # Check if enough time has passed for retry
+            if not should_retry_payment(payment_tx):
+                delay = calculate_retry_delay(payment_tx.retry_count)
+                next_retry_time = payment_tx.last_retry_at + delay
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Please wait until {next_retry_time.isoformat()} before retrying. Exponential backoff in effect."
+                )
+            
+            # Get invoice and customer details
+            invoice = db.query(DBInvoice).filter(
+                DBInvoice.id == payment_tx.invoice_id
+            ).first()
+            
+            if invoice:
+                customer = db.query(DBCustomer).filter(
+                    DBCustomer.id == invoice.customer_id
+                ).first()
+    
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Associated invoice not found")
+    
+    if not customer:
+        raise HTTPException(status_code=400, detail="Customer information missing")
+    
+    # Generate new payment URL for retry
+    payment_url = payfast_service.generate_payment_url(
+        invoice_id=str(invoice.id),
+        invoice_number=invoice.invoice_number,
+        amount=float(invoice.total),
+        customer_email=customer.email,
+        customer_name=customer.name,
+        description=f"Retry: Invoice {invoice.invoice_number} - Workshop Services (Attempt {payment_tx.retry_count + 1})",
+        return_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/payment/success",
+        cancel_url=f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/payment/cancel",
+        notify_url=f"{os.getenv('BACKEND_URL', 'http://localhost:8000')}/api/payment/notify",
+    )
+    
+    # Update retry tracking in DB
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            payment_tx = db.query(DBPaymentTransaction).filter(
+                DBPaymentTransaction.payment_id == payment_id
+            ).first()
+            
+            if payment_tx:
+                payment_tx.retry_count += 1
+                payment_tx.last_retry_at = datetime.utcnow()
+                db.commit()
+                
+                logger.info(f"Payment retry initiated: {payment_id}, attempt #{payment_tx.retry_count}")
+    
+    return {
+        "payment_url": payment_url,
+        "invoice_id": str(invoice.id),
+        "amount": float(invoice.total),
+        "retry_count": payment_tx.retry_count + 1 if payment_tx else 1,
+        "message": "Retry payment URL generated. Redirect customer to payment_url to complete payment."
+    }
+
+
+# =============================================================================
+
 # Analytics & Dashboard Endpoints
 # =============================================================================
 
@@ -1692,6 +2652,105 @@ async def get_job_analytics(current_user: UserResponse = Depends(get_current_use
     }
 
 
+@app.get("/api/analytics/invoices/aging", response_model=InvoiceAgingReport, tags=["Analytics"])
+async def get_invoice_aging_report(current_user: UserResponse = Depends(get_current_user)):
+    """
+    Get invoice aging report showing overdue invoices awaiting payment.
+    
+    Groups invoices by age: 0-30 days, 31-60 days, 61-90 days, 90+ days overdue.
+    """
+    company_id = current_user.company_id
+    today = datetime.utcnow().date()
+    
+    # Get all overdue invoices scoped to company
+    overdue_invoices = []
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            # Query for unpaid invoices past due date
+            invoices = db.query(DBInvoice).filter(
+                DBInvoice.company_id == company_id,
+                DBInvoice.status.in_(['Draft', 'Sent', 'Overdue']),
+                DBInvoice.due_date <= datetime.utcnow()
+            ).all()
+            
+            for invoice in invoices:
+                days_overdue = (today - invoice.due_date.date()).days
+                if days_overdue >= 0:
+                    overdue_invoices.append({
+                        'id': invoice.id,
+                        'invoice_number': invoice.invoice_number,
+                        'customer_name': invoice.customer.name if invoice.customer else 'Unknown',
+                        'amount': invoice.total,
+                        'due_date': invoice.due_date,
+                        'days_overdue': days_overdue,
+                        'status': invoice.status.value if hasattr(invoice.status, 'value') else str(invoice.status),
+                    })
+    else:
+        # Use in-memory store
+        invoices = _invoices.values()
+        for invoice in invoices:
+            if invoice.get("company_id") != company_id:
+                continue
+            if invoice.get("status") not in [InvoiceStatus.DRAFT, InvoiceStatus.SENT, InvoiceStatus.OVERDUE]:
+                continue
+            
+            due_date = invoice.get("due_date")
+            if isinstance(due_date, str):
+                due_date = datetime.fromisoformat(due_date)
+            
+            if due_date <= datetime.utcnow():
+                days_overdue = (today - due_date.date()).days
+                if days_overdue >= 0:
+                    customer = _customers.get(invoice.get("customer_id"), {})
+                    overdue_invoices.append({
+                        'id': invoice.get('id'),
+                        'invoice_number': invoice.get('invoice_number', ''),
+                        'customer_name': customer.get('name', 'Unknown'),
+                        'amount': invoice.get('total', 0),
+                        'due_date': due_date,
+                        'days_overdue': days_overdue,
+                        'status': invoice.get('status', 'Unknown'),
+                    })
+    
+    # Sort by days overdue (most overdue first)
+    overdue_invoices.sort(key=lambda x: x['days_overdue'], reverse=True)
+    
+    # Group by age
+    age_groups = [
+        {'label': '0-30 days overdue', 'min_days': 0, 'max_days': 30},
+        {'label': '31-60 days overdue', 'min_days': 31, 'max_days': 60},
+        {'label': '61-90 days overdue', 'min_days': 61, 'max_days': 90},
+        {'label': '90+ days overdue', 'min_days': 91, 'max_days': 999},
+    ]
+    
+    age_group_results = []
+    for group in age_groups:
+        matching = [
+            inv for inv in overdue_invoices
+            if group['min_days'] <= inv['days_overdue'] <= group['max_days']
+        ]
+        
+        group_result = InvoiceAgeGroup(
+            label=group['label'],
+            min_days=group['min_days'],
+            max_days=group['max_days'],
+            count=len(matching),
+            total_amount=sum(inv['amount'] for inv in matching)
+        )
+        age_group_results.append(group_result)
+    
+    total_overdue_amount = sum(inv['amount'] for inv in overdue_invoices)
+    
+    return InvoiceAgingReport(
+        generated_at=datetime.utcnow(),
+        total_overdue_amount=total_overdue_amount,
+        total_overdue_count=len(overdue_invoices),
+        age_groups=age_group_results,
+        invoices=overdue_invoices
+    )
+
+
 # =============================================================================
 # Health Check
 # =============================================================================
@@ -1720,7 +2779,7 @@ async def api_info():
             "parts": ["/api/parts"],
             "invoices": ["/api/invoices"],
             "ev": ["/api/ev/predict-rul", "/api/ev/model-info"],
-            "analytics": ["/api/analytics/dashboard", "/api/analytics/revenue"],
+            "analytics": ["/api/analytics/dashboard", "/api/analytics/revenue", "/api/analytics/invoices/aging"],
         },
     }
 

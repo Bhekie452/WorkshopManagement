@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { store } from '../services/store';
+import { invoiceService } from '../services/invoiceService';
 import { Pagination, paginate } from '../components/Pagination';
 import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
@@ -252,8 +253,16 @@ export const Sales: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleView = (doc: Invoice) => {
-    setViewingDoc(doc);
+  const handleView = async (doc: Invoice) => {
+    try {
+      // Try to load items from backend API; fall back to in-memory items if API fails
+      const { invoiceService } = await import('../services/invoiceService');
+      const items = await invoiceService.listInvoiceItems(doc.id);
+      setViewingDoc({ ...doc, items });
+    } catch (err) {
+      console.warn('Failed to load items from API, using local data', err);
+      setViewingDoc(doc);
+    }
   };
 
   const handlePrint = () => {
@@ -340,9 +349,32 @@ export const Sales: React.FC = () => {
     e.preventDefault();
     if (!formData.customerId || !formData.items?.length) return;
 
-    await store.addInvoice(formData as Invoice); // Omit<Invoice, 'id'> handled by store
-    setIsModalOpen(false);
-    refreshData();
+    try {
+      // Create invoice first
+      const createdInvoice = await store.addInvoice(formData as Invoice);
+      
+      // Sync items to backend API (so they persist in DB)
+      if (createdInvoice && formData.items.length > 0) {
+        for (const item of formData.items) {
+          try {
+            await invoiceService.createInvoiceItem(createdInvoice.id, {
+              description: item.description,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice
+            });
+          } catch (err) {
+            console.warn(`Failed to sync item ${item.id} to API:`, err);
+            // Don't fail the whole save; item stays in local store as fallback
+          }
+        }
+      }
+      
+      setIsModalOpen(false);
+      refreshData();
+    } catch (error) {
+      console.error('Failed to save invoice', error);
+      alert('Failed to save invoice. Please try again.');
+    }
   };
 
   const convertQuoteToInvoice = async (quote: Invoice) => {

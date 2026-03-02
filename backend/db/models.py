@@ -62,6 +62,13 @@ class InvoiceStatusEnum(str, enum.Enum):
     CANCELLED = "Cancelled"
 
 
+class PaymentStatusEnum(str, enum.Enum):
+    PENDING = "Pending"
+    COMPLETE = "Complete"
+    FAILED = "Failed"
+    CANCELLED = "Cancelled"
+
+
 class AppointmentStatusEnum(str, enum.Enum):
     SCHEDULED = "Scheduled"
     CONFIRMED = "Confirmed"
@@ -630,3 +637,59 @@ class JobAttachment(Base):
         return f"<JobAttachment(id={self.id}, filename={self.filename})>"
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+# =============================================================================
+# Table 16: Payment Transactions
+# =============================================================================
+
+class PaymentTransaction(Base):
+    """PayFast payment transaction records."""
+    __tablename__ = "payment_transactions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
+    invoice_id: Mapped[str] = mapped_column(String(36), ForeignKey("invoices.id"), nullable=False)
+    
+    # PayFast transaction IDs
+    payment_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)  # Our invoice number
+    pf_payment_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)  # PayFast transaction ID
+    
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    amount_gross: Mapped[Optional[float]] = mapped_column(Float)
+    amount_fee: Mapped[Optional[float]] = mapped_column(Float)
+    amount_net: Mapped[Optional[float]] = mapped_column(Float)
+    
+    status: Mapped[PaymentStatusEnum] = mapped_column(Enum(PaymentStatusEnum), default=PaymentStatusEnum.PENDING)
+    payment_method: Mapped[Optional[str]] = mapped_column(String(50))  # creditcard, eft, bitcoin
+    
+    # Payment dates
+    initiated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    
+    # PayFast response data (stored for audit trail)
+    payfast_response: Mapped[Optional[dict]] = mapped_column(JSON)
+    
+    # Signature verification
+    signature_valid: Mapped[bool] = mapped_column(Boolean, default=False)
+    signature_hash: Mapped[Optional[str]] = mapped_column(String(255))
+    
+    # Retry tracking
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    company: Mapped["Company"] = relationship("Company")
+    invoice: Mapped["Invoice"] = relationship("Invoice")
+
+    __table_args__ = (
+        Index('idx_payment_invoice', 'invoice_id'),
+        Index('idx_payment_status', 'status'),
+        Index('idx_payment_company', 'company_id'),
+    )
+
+    def __repr__(self):
+        return f"<PaymentTransaction(id={self.id}, invoice={self.invoice_id}, status={self.status}, amount={self.amount})>"
