@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import secrets
 import logging
+import asyncio
 from pathlib import Path
 import sys
 
@@ -42,6 +43,7 @@ from api.payfast import payfast_service
 # Email and SMS services
 from services.email_service import email_service
 from services.sms_service import sms_service
+from services.messaging_service import MessagingService, MessagingTemplates, init_messaging_service
 
 # Database imports (optional — falls back to in-memory if unavailable)
 try:
@@ -51,7 +53,7 @@ try:
         Base, Customer as DBCustomer, Vehicle as DBVehicle,
         Job as DBJob, Part as DBPart, Invoice as DBInvoice, User as DBUser,
         InvoiceItem as DBInvoiceItem, PaymentTransaction as DBPaymentTransaction,
-        Company as DBCompany,
+        Company as DBCompany, MessageLog as DBMessageLog,
     )
     # Use SQLite fallback if PostgreSQL not available
     DB_URL = os.getenv("DATABASE_URL", "")
@@ -996,6 +998,103 @@ async def delete_vehicle(vehicle_id: str, current_user: UserResponse = Depends(g
 
 
 # =============================================================================
+# Helper Functions for Messaging Triggers
+# =============================================================================
+
+async def send_job_message(
+    job_id: str,
+    template_id: str,
+    trigger_event: str,
+    variables: Dict[str, str],
+    company_id: str,
+    customer_id: str,
+):
+    """Helper to send job-related messages asynchronously."""
+    try:
+        messaging_svc = MessagingService(sms_service=sms_service)
+        cust = _customers.get(customer_id, {})
+        recipient_phone = cust.get('phone', '')
+        
+        if not recipient_phone:
+            logger.warning(f"Customer {customer_id} has no phone number, skipping message")
+            return
+        
+        await messaging_svc.send_message(
+            template_id=template_id,
+            customer_id=customer_id,
+            company_id=company_id,
+            recipient_phone=recipient_phone,
+            variables=variables,
+            trigger_event=trigger_event,
+            job_id=job_id,
+        )
+    except Exception as e:
+        logger.error(f"Error sending job message: {e}")
+
+
+async def send_appointment_message(
+    appointment_id: str,
+    template_id: str,
+    trigger_event: str,
+    variables: Dict[str, str],
+    company_id: str,
+    customer_id: str,
+):
+    """Helper to send appointment-related messages asynchronously."""
+    try:
+        messaging_svc = MessagingService(sms_service=sms_service)
+        cust = _customers.get(customer_id, {})
+        recipient_phone = cust.get('phone', '')
+        
+        if not recipient_phone:
+            logger.warning(f"Customer {customer_id} has no phone number, skipping message")
+            return
+        
+        await messaging_svc.send_message(
+            template_id=template_id,
+            customer_id=customer_id,
+            company_id=company_id,
+            recipient_phone=recipient_phone,
+            variables=variables,
+            trigger_event=trigger_event,
+            appointment_id=appointment_id,
+        )
+    except Exception as e:
+        logger.error(f"Error sending appointment message: {e}")
+
+
+async def send_invoice_message(
+    invoice_id: str,
+    template_id: str,
+    trigger_event: str,
+    variables: Dict[str, str],
+    company_id: str,
+    customer_id: str,
+):
+    """Helper to send invoice-related messages asynchronously."""
+    try:
+        messaging_svc = MessagingService(sms_service=sms_service)
+        cust = _customers.get(customer_id, {})
+        recipient_phone = cust.get('phone', '')
+        
+        if not recipient_phone:
+            logger.warning(f"Customer {customer_id} has no phone number, skipping message")
+            return
+        
+        await messaging_svc.send_message(
+            template_id=template_id,
+            customer_id=customer_id,
+            company_id=company_id,
+            recipient_phone=recipient_phone,
+            variables=variables,
+            trigger_event=trigger_event,
+            invoice_id=invoice_id,
+        )
+    except Exception as e:
+        logger.error(f"Error sending invoice message: {e}")
+
+
+# =============================================================================
 # Jobs/Work Orders Endpoints
 # =============================================================================
 
@@ -1035,6 +1134,33 @@ async def create_job(job: JobCreate, current_user: UserResponse = Depends(get_cu
         "created_at": datetime.now(),
     }
     _jobs[job_id] = job_data
+    
+    # Send "job received" notification asynchronously
+    try:
+        vehicle = _vehicles.get(job.vehicle_id, {})
+        vehicle_reg = vehicle.get('registration', 'N/A')
+        company = _companies.get(current_user.company_id, {})
+        workshop_name = company.get('name', 'Workshop')
+        
+        variables = {
+            'customerName': cust.get('name', 'Customer'),
+            'vehicleReg': vehicle_reg,
+            'jobNumber': job_id,
+            'workshopName': workshop_name,
+        }
+        
+        # Send notification asynchronously (non-blocking)
+        asyncio.create_task(send_job_message(
+            job_id=job_id,
+            template_id='job_received',
+            trigger_event='job_created',
+            variables=variables,
+            company_id=current_user.company_id,
+            customer_id=job.customer_id,
+        ))
+    except Exception as e:
+        logger.warning(f"Failed to queue job received message: {e}")
+    
     return JobResponse(**job_data)
 
 
@@ -1054,6 +1180,7 @@ async def update_job(job_id: str, update: JobUpdate, current_user: UserResponse 
     if not job or job.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Job not found")
     
+    old_status = job.get("status")
     job_data = job
     update_data = update.model_dump(exclude_unset=True)
     job_data.update(update_data)
@@ -1061,6 +1188,47 @@ async def update_job(job_id: str, update: JobUpdate, current_user: UserResponse 
     # Set completed_at if status changed to Completed or Paid
     if update.status in [JobStatus.COMPLETED, JobStatus.PAID]:
         job_data["completed_at"] = datetime.now()
+    
+    # Send status change messages asynchronously
+    new_status = update_data.get('status')
+    if new_status and new_status != old_status:
+        try:
+            cust = _customers.get(job['customer_id'], {})
+            vehicle = _vehicles.get(job['vehicle_id'], {})
+            company = _companies.get(current_user.company_id, {})
+            
+            vehicle_reg = vehicle.get('registration', 'N/A')
+            customer_name = cust.get('name', 'Customer')
+            workshop_name = company.get('name', 'Workshop')
+            due_date = job.get('due_date', '')
+            
+            variables = {
+                'customerName': customer_name,
+                'vehicleReg': vehicle_reg,
+                'jobNumber': job_id,
+                'workshopName': workshop_name,
+                'dueDate': str(due_date),
+            }
+            
+            # Map status to template
+            template_map = {
+                JobStatus.IN_PROGRESS: ('job_in_progress', 'job_status_changed_in_progress'),
+                JobStatus.AWAITING_APPROVAL: ('job_ready', 'job_awaiting_approval'),
+                JobStatus.COMPLETED: ('job_completion', 'job_completed'),
+            }
+            
+            if new_status in template_map:
+                template_id, trigger = template_map[new_status]
+                asyncio.create_task(send_job_message(
+                    job_id=job_id,
+                    template_id=template_id,
+                    trigger_event=trigger,
+                    variables=variables,
+                    company_id=current_user.company_id,
+                    customer_id=job['customer_id'],
+                ))
+        except Exception as e:
+            logger.warning(f"Failed to queue job status message: {e}")
     
     return JobResponse(**job_data)
 
@@ -1288,6 +1456,32 @@ async def create_invoice(invoice: InvoiceCreate, current_user: UserResponse = De
         "status": InvoiceStatus.DRAFT,
     }
     _invoices[invoice_id] = invoice_data
+    
+    # Send "invoice created" notification for actual invoices (not quotes) asynchronously
+    if invoice.type == "Invoice":
+        try:
+            company = _companies.get(current_user.company_id, {})
+            workshop_name = company.get('name', 'Workshop')
+            
+            variables = {
+                'customerName': cust.get('name', 'Customer'),
+                'invoiceNumber': number,
+                'totalCost': f"{total:.2f}",
+                'dueDate': invoice_data['due_date'].strftime('%Y-%m-%d'),
+                'workshopName': workshop_name,
+            }
+            
+            asyncio.create_task(send_invoice_message(
+                invoice_id=invoice_id,
+                template_id='invoice_created',
+                trigger_event='invoice_created',
+                variables=variables,
+                company_id=current_user.company_id,
+                customer_id=invoice.customer_id,
+            ))
+        except Exception as e:
+            logger.warning(f"Failed to queue invoice created message: {e}")
+    
     return InvoiceResponse(**invoice_data)
 
 
@@ -1553,6 +1747,37 @@ async def create_appointment(appointment: AppointmentCreate, current_user: UserR
         _appointments[company_id] = {}
     
     _appointments[company_id][appointment_id] = appointment_data
+    
+    # Send "appointment confirmation" notification asynchronously
+    try:
+        cust = _customers.get(appointment.customer_id, {})
+        company = _companies.get(company_id, {})
+        workshop_name = company.get('name', 'Workshop')
+        
+        # Format appointment details
+        start_time = appointment.start_time
+        if isinstance(start_time, str):
+            start_time = datetime.fromisoformat(start_time)
+        
+        variables = {
+            'customerName': cust.get('name', 'Customer'),
+            'appointmentType': appointment.appointment_type or 'Service',
+            'appointmentDate': start_time.strftime('%Y-%m-%d'),
+            'appointmentTime': start_time.strftime('%H:%M'),
+            'workshopName': workshop_name,
+        }
+        
+        asyncio.create_task(send_appointment_message(
+            appointment_id=appointment_id,
+            template_id='appointment_confirmation',
+            trigger_event='appointment_created',
+            variables=variables,
+            company_id=company_id,
+            customer_id=appointment.customer_id,
+        ))
+    except Exception as e:
+        logger.warning(f"Failed to queue appointment confirmation message: {e}")
+    
     return AppointmentResponse(**appointment_data)
 
 
@@ -2752,6 +2977,158 @@ async def get_invoice_aging_report(current_user: UserResponse = Depends(get_curr
 
 
 # =============================================================================
+# Messaging Endpoints
+# =============================================================================
+
+class SendMessageRequest(BaseModel):
+    """Request to send SMS/WhatsApp message."""
+    template_id: str = Field(..., description="Message template ID (job_received, appointment_confirmation, etc.)")
+    customer_id: str = Field(..., description="Customer ID")
+    variables: Dict[str, str] = Field(..., description="Template variables for rendering")
+    trigger_event: str = Field(..., description="Event that triggered the message")
+    job_id: Optional[str] = None
+    invoice_id: Optional[str] = None
+    appointment_id: Optional[str] = None
+
+
+@app.post("/api/messages/send", response_model=dict, tags=["Messaging"])
+async def send_message(
+    req: SendMessageRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Send SMS/WhatsApp message based on template.
+    
+    Triggers:
+    - job_received: When job is created
+    - job_in_progress: When job status changes to "In Progress"
+    - job_ready: When job is awaiting pickup/delivery
+    - job_completion: When job is completed
+    - appointment_confirmation: When appointment is scheduled
+    - appointment_reminder: 24 hours before appointment
+    - invoice_created: When invoice is generated
+    - invoice_reminder: For overdue invoices
+    - payment_confirmed: When payment is received
+    - satisfaction_survey: Post-job completion
+    """
+    try:
+        # Get customer for phone number
+        if DB_AVAILABLE and db:
+            customer = db.query(DBCustomer).filter(DBCustomer.id == req.customer_id).first()
+            if not customer:
+                raise HTTPException(status_code=404, detail="Customer not found")
+            
+            recipient_phone = customer.phone
+        else:
+            # Fallback to in-memory
+            customer = _customers.get(req.customer_id, {})
+            if not customer:
+                raise HTTPException(status_code=404, detail="Customer not found")
+            recipient_phone = customer.get('phone', '')
+        
+        # Get company ID from current user
+        company_id = current_user.company_id
+        
+        # Create messaging service with SMS service
+        messaging_svc = MessagingService(sms_service=sms_service, db=db)
+        
+        # Send message
+        success = await messaging_svc.send_message(
+            template_id=req.template_id,
+            customer_id=req.customer_id,
+            company_id=company_id,
+            recipient_phone=recipient_phone,
+            variables=req.variables,
+            trigger_event=req.trigger_event,
+            job_id=req.job_id,
+            invoice_id=req.invoice_id,
+            appointment_id=req.appointment_id,
+        )
+        
+        return {
+            "success": success,
+            "message": "Message sent successfully" if success else "Failed to send message",
+            "template_id": req.template_id,
+            "customer_id": req.customer_id,
+            "trigger_event": req.trigger_event,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/messages/templates", response_model=dict, tags=["Messaging"])
+async def get_message_templates(current_user: UserResponse = Depends(get_current_user)):
+    """
+    Get available message templates.
+    
+    Templates:
+    - job_received, job_in_progress, job_ready, job_completion
+    - appointment_confirmation, appointment_reminder
+    - invoice_created, invoice_reminder
+    - payment_confirmed
+    - satisfaction_survey
+    """
+    templates = {}
+    for template_id, template_info in MessagingTemplates.TEMPLATES.items():
+        templates[template_id] = {
+            'name': template_info['name'],
+            'channel': template_info['channel'],
+            'variables': [
+                var.strip('{}')
+                for var in set(
+                    s for s in template_info['content'].split()
+                    if s.startswith('{') and s.endswith('}')
+                )
+            ]
+        }
+    
+    return {"templates": templates}
+
+
+@app.get("/api/messages/history", response_model=list, tags=["Messaging"])
+async def get_message_history(
+    limit: int = Query(100, ge=1, le=1000),
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get message sending history for current company."""
+    if not DB_AVAILABLE or not db:
+        return []
+    
+    try:
+        company_id = current_user.company_id
+        
+        messages = db.query(DBMessageLog)\
+            .filter(DBMessageLog.company_id == company_id)\
+            .order_by(DBMessageLog.created_at.desc())\
+            .limit(limit)\
+            .all()
+        
+        return [
+            {
+                'id': msg.id,
+                'template_id': msg.template_id,
+                'template_name': msg.template_name,
+                'customer_id': msg.customer_id,
+                'recipient_phone': msg.recipient_phone,
+                'channel': msg.channel.value,
+                'status': msg.status.value,
+                'trigger_event': msg.trigger_event,
+                'sent_at': msg.sent_at.isoformat() if msg.sent_at else None,
+                'created_at': msg.created_at.isoformat(),
+            }
+            for msg in messages
+        ]
+    except Exception as e:
+        logger.error(f"Error retrieving message history: {e}")
+        return []
+
+
+# =============================================================================
 # Health Check
 # =============================================================================
 
@@ -2778,6 +3155,7 @@ async def api_info():
             "jobs": ["/api/jobs"],
             "parts": ["/api/parts"],
             "invoices": ["/api/invoices"],
+            "messages": ["/api/messages/send", "/api/messages/templates", "/api/messages/history"],
             "ev": ["/api/ev/predict-rul", "/api/ev/model-info"],
             "analytics": ["/api/analytics/dashboard", "/api/analytics/revenue", "/api/analytics/invoices/aging"],
         },

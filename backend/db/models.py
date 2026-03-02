@@ -69,6 +69,18 @@ class PaymentStatusEnum(str, enum.Enum):
     CANCELLED = "Cancelled"
 
 
+class MessageStatusEnum(str, enum.Enum):
+    PENDING = "Pending"
+    SENT = "Sent"
+    FAILED = "Failed"
+    DELIVERED = "Delivered"
+
+
+class MessageChannelEnum(str, enum.Enum):
+    SMS = "SMS"
+    WHATSAPP = "WhatsApp"
+
+
 class AppointmentStatusEnum(str, enum.Enum):
     SCHEDULED = "Scheduled"
     CONFIRMED = "Confirmed"
@@ -693,3 +705,62 @@ class PaymentTransaction(Base):
 
     def __repr__(self):
         return f"<PaymentTransaction(id={self.id}, invoice={self.invoice_id}, status={self.status}, amount={self.amount})>"
+
+
+# =============================================================================
+# Table: Message Logs
+# =============================================================================
+
+class MessageLog(Base):
+    """Message/SMS/WhatsApp logging and tracking."""
+    __tablename__ = "message_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    company_id: Mapped[str] = mapped_column(String(36), ForeignKey("companies.id"), nullable=False)
+    customer_id: Mapped[str] = mapped_column(String(36), ForeignKey("customers.id"), nullable=False)
+    
+    # Message details
+    channel: Mapped[MessageChannelEnum] = mapped_column(Enum(MessageChannelEnum), default=MessageChannelEnum.SMS)
+    template_id: Mapped[str] = mapped_column(String(50), nullable=False)  # job_received, job_in_progress, etc.
+    template_name: Mapped[str] = mapped_column(String(200))  # Human-readable name
+    
+    recipient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    recipient_email: Mapped[Optional[str]] = mapped_column(String(200))
+    
+    message_content: Mapped[str] = mapped_column(Text)
+    
+    # Trigger context
+    job_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("jobs.id"))
+    invoice_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("invoices.id"))
+    appointment_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("appointments.id"))
+    
+    trigger_event: Mapped[str] = mapped_column(String(50))  # job_status_changed, invoice_created, etc.
+    
+    # Status tracking
+    status: Mapped[MessageStatusEnum] = mapped_column(Enum(MessageStatusEnum), default=MessageStatusEnum.PENDING)
+    external_message_id: Mapped[Optional[str]] = mapped_column(String(100))  # Twilio message ID
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+    
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    company: Mapped["Company"] = relationship("Company")
+    customer: Mapped["Customer"] = relationship("Customer")
+    job: Mapped[Optional["Job"]] = relationship("Job")
+    invoice: Mapped[Optional["Invoice"]] = relationship("Invoice")
+    appointment: Mapped[Optional["Appointment"]] = relationship("Appointment")
+
+    __table_args__ = (
+        Index('idx_message_company', 'company_id'),
+        Index('idx_message_customer', 'customer_id'),
+        Index('idx_message_status', 'status'),
+        Index('idx_message_template', 'template_id'),
+        Index('idx_message_job', 'job_id'),
+    )
+
+    def __repr__(self):
+        return f"<MessageLog(id={self.id}, template={self.template_id}, status={self.status})>"

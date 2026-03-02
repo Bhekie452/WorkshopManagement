@@ -161,6 +161,24 @@ class SMSService:
             logger.error(f"Failed to send payment reminder SMS: {e}")
             return False
     
+    async def send_sms(self, phone: str, message: str) -> bool:
+        """
+        Send a generic SMS message.
+        
+        Args:
+            phone: Recipient phone number (any format, will be normalized)
+            message: SMS message content
+        
+        Returns:
+            True if SMS sent successfully, False otherwise
+        """
+        try:
+            formatted_phone = self._format_phone_number(phone)
+            return await self._send_sms(formatted_phone, message)
+        except Exception as e:
+            logger.error(f"Failed to send SMS: {e}")
+            return False
+    
     async def _send_sms(self, to_phone: str, message: str) -> bool:
         """
         Send SMS via Twilio API.
