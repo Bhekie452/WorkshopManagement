@@ -12,7 +12,8 @@ class NotificationService {
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = import.meta.env.VITE_API_URL || 'localhost:8000';
+    let host = import.meta.env.VITE_API_URL || 'localhost:8000';
+    host = host.replace(/^https?:\/\//, '');
     const wsUrl = `${protocol}//${host}/api/ws/${userId}`;
 
     try {
