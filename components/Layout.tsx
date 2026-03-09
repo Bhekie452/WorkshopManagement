@@ -24,11 +24,17 @@ import {
   Building2,
   Shield,
   Sun,
-  Moon
+  Moon,
+  Mail,
+  ShieldCheck,
+  ClipboardList
 } from 'lucide-react';
 import { User } from '../types';
 import { VoiceAssistant } from './VoiceAssistant';
+import { NotificationBell } from './NotificationBell';
+import { SyncIndicator } from './SyncIndicator';
 import { useAuth } from './AuthContext';
+import { useRealtimeSync, WsMessage } from '../hooks/useRealtimeSync';
 import { useTheme } from './ThemeContext';
 import { Permission } from '../services/rbac';
 import { ROLE_COLORS, ROLE_LABELS } from '../services/rbac';
@@ -101,6 +107,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
   const userMenuRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const { can } = useAuth();
+
+  // Enable real-time WebSocket sync
+  useRealtimeSync({
+    onMessage: (msg: WsMessage) => {
+      // Logic to handle global refreshes if needed, 
+      // or specific toast notifications for background events.
+      console.log('WS Broadcast:', msg.event, msg.data);
+    }
+  });
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -202,6 +217,9 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
                 <NavItem to="/admin/companies" icon={Building2} label="Companies" active={location.pathname === '/admin/companies'} />
                 <NavItem to="/admin/users" icon={Users} label="All Users" active={location.pathname === '/admin/users'} />
                 <NavItem to="/admin/roles" icon={Shield} label="Roles & Permissions" active={location.pathname === '/admin/roles'} />
+                <NavItem to="/admin/invitations" icon={Mail} label="User Invitations" active={location.pathname === '/admin/invitations'} />
+                <NavItem to="/admin/system" icon={ShieldCheck} label="System Admin" active={location.pathname === '/admin/system'} />
+                <NavItem to="/admin/audit" icon={ClipboardList} label="Audit Trail" active={location.pathname === '/admin/audit'} />
               </nav>
             </div>
           )}
@@ -291,15 +309,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
           </button>
 
           <div className="flex-1 flex justify-end items-center space-x-4">
-             <button className="relative p-2 text-gray-400 hover:text-gray-500">
-               <Bell size={20} />
-               <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
-             </button>
+             <SyncIndicator />
+             <NotificationBell />
           </div>
         </header>
 
-        {/* Scrollable Content */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        {/* Scrollable Content - mobile-optimized padding and touch scroll */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 lg:p-8 pb-safe">
           {children}
         </main>
 

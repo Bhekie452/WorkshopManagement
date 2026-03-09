@@ -41,7 +41,7 @@ describe('AuthService custom requests', () => {
                 refreshToken: 'ref',
             }),
         } as any;
-        (global.fetch as unknown as vi.Mock).mockResolvedValue(fake);
+        (globalThis.fetch as any).mockResolvedValue(fake);
 
         const resp: any = await (AuthService as any).requestCustomAuth('/foo', { hi: 'there' });
         expect(resp.user.companyId).toBe('company-123');

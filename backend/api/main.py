@@ -24,10 +24,15 @@ import os
 import hashlib
 import hmac
 import secrets
-import logging
 import asyncio
+import time
+import logging
 from pathlib import Path
 import sys
+from fastapi import WebSocket, WebSocketDisconnect, Response
+from io import BytesIO
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
 
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -55,6 +60,7 @@ try:
         Job as DBJob, Part as DBPart, Invoice as DBInvoice, User as DBUser,
         InvoiceItem as DBInvoiceItem, PaymentTransaction as DBPaymentTransaction,
         Company as DBCompany, MessageLog as DBMessageLog, UserInvitation as DBUserInvitation,
+        DiagnosticRecord as DBDiagnostic, EVBatteryRUL as DBEVBatteryRUL,
     )
     # Use SQLite fallback if PostgreSQL not available
     DB_URL = os.getenv("DATABASE_URL", "")
@@ -110,8 +116,78 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Security Constants
+ACCESS_TOKEN_EXPIRE_HOURS = 24
+RATE_LIMIT_REQUESTS = 100  # requests per window
+RATE_LIMIT_WINDOW = 60      # seconds
+_rate_limit_store: Dict[str, List[float]] = {}
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Only rate limit auth endpoints for now
+    if request.url.path == "/api/auth/token":
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        
+        # Clean up old entries
+        _rate_limit_store[client_ip] = [t for t in _rate_limit_store.get(client_ip, []) if now - t < RATE_LIMIT_WINDOW]
+        
+        if len(_rate_limit_store[client_ip]) >= RATE_LIMIT_REQUESTS:
+            return Response(content="Rate limit exceeded", status_code=429)
+        
+        _rate_limit_store[client_ip].append(now)
+        
+    return await call_next(request)
+
 # OAuth2 for JWT authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
+
+
+# =============================================================================
+# WebSocket Connection Manager
+# =============================================================================
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, user_id: str):
+        await websocket.accept()
+        if user_id not in self.active_connections:
+            self.active_connections[user_id] = []
+        self.active_connections[user_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, user_id: str):
+        if user_id in self.active_connections:
+            self.active_connections[user_id].remove(websocket)
+            if not self.active_connections[user_id]:
+                del self.active_connections[user_id]
+
+    async def send_personal_message(self, message: dict, user_id: str):
+        if user_id in self.active_connections:
+            for connection in self.active_connections[user_id]:
+                await connection.send_json(message)
+
+    async def broadcast(self, message: dict, company_id: Optional[str] = None):
+        """Broadcast to all users or all users in a company."""
+        # Note: In a real app, we'd filter connections by company_id
+        # For now, we'll just broadcast to everyone if company_id is None
+        # or implement a simple mapping.
+        for user_id, connections in self.active_connections.items():
+            # In a full implementation, we'd check user's company membership
+            for connection in connections:
+                await connection.send_json(message)
+
+manager = ConnectionManager()
 
 
 # =============================================================================
@@ -352,6 +428,7 @@ class JobBase(BaseModel):
     description: str
     priority: Priority = Priority.MEDIUM
     estimated_cost: float = 0
+    estimated_hours: float = 0
     due_date: datetime
 
 
@@ -364,6 +441,8 @@ class JobUpdate(BaseModel):
     description: Optional[str] = None
     priority: Optional[Priority] = None
     estimated_cost: Optional[float] = None
+    estimated_hours: Optional[float] = None
+    started_at: Optional[datetime] = None
 
 
 class JobResponse(JobBase):
@@ -372,9 +451,12 @@ class JobResponse(JobBase):
     status: JobStatus
     created_at: datetime
     completed_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
     tasks: List[JobTask] = []
     customer_name: Optional[str] = None
     vehicle_info: Optional[str] = None
+    actual_hours: float = 0
+    time_variance: float = 0
 
     class Config:
         from_attributes = True
@@ -457,6 +539,10 @@ class InvoiceResponse(InvoiceBase):
 
     class Config:
         from_attributes = True
+
+
+class BatchInvoiceRequest(BaseModel):
+    invoices: List[InvoiceCreate]
 
 
 # --- Payments ---
@@ -562,6 +648,94 @@ class WarrantyBase(BaseModel):
     coverage_description: Optional[str] = None
 
 
+# --- Analytics ---
+class TechnicianPerformance(BaseModel):
+    technician_id: str
+    technician_name: str
+    jobs_completed: int
+    avg_time_per_job: float  # hours
+    revenue_generated: float
+    utilization_rate: float  # percentage
+    quality_score: float  # percentage (1 - warranty_claims/total_jobs)
+    warranty_claims: int
+
+class TechnicianJobAnalytics(BaseModel):
+    job_id: str
+    job_number: str
+    service_type: str
+    status: str
+    hours_logged: float
+    revenue: float
+    completed_at: Optional[datetime]
+
+class TechnicianRevenueAnalytics(BaseModel):
+    technician_id: str
+    total_revenue: float
+    labor_revenue: float
+    parts_revenue: float
+    period: str  # e.g., "Monthly", "Weekly"
+
+
+class TimeAccuracyMetric(BaseModel):
+    service_type: str
+    avg_estimated_hours: float
+    avg_actual_hours: float
+    avg_variance: float
+    accuracy_percentage: float
+    job_count: int
+
+
+class TimeTrackingAnalytics(BaseModel):
+    overall_accuracy: float
+    metrics_by_service: List[TimeAccuracyMetric]
+    top_bottlenecks: List[Dict[str, Any]]
+
+
+# --- EV Fleet ---
+class EVBatteryData(BaseModel):
+    current_soh: float = Field(..., ge=0, le=100, description="State of Health %")
+    cycle_count: int = Field(..., ge=0, description="Charge cycle count")
+    avg_temperature: float = Field(default=25, description="Avg operating temp °C")
+    fast_charge_ratio: float = Field(default=0, ge=0, le=1, description="Fast charge ratio")
+    age_months: int = Field(default=12, ge=0, description="Battery age in months")
+    avg_dod: float = Field(default=50, ge=0, le=100, description="Avg depth of discharge")
+    capacity_kwh: float = Field(default=60, description="Battery capacity kWh")
+    ambient_temp_avg: float = Field(default=22, description="Avg ambient temp °C")
+
+
+class DiagnosticBase(BaseModel):
+    vehicle_id: str
+    symptoms: Optional[str] = None
+    dtc_codes: List[str] = []
+    battery_telemetry: Optional[EVBatteryData] = None
+
+class DiagnosticCreate(DiagnosticBase):
+    pass
+
+class DiagnosticResponse(DiagnosticBase):
+    id: str
+    ai_analysis: Optional[str] = None
+    recorded_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class RULPrediction(BaseModel):
+    rul_months: float
+    rul_cycles: int
+    confidence: float
+    health_status: str
+    current_soh: float
+    eol_threshold: float
+    recommendations: List[str]
+
+
+class BatteryHealthResponse(BaseModel):
+    current: Optional[RULPrediction] = None
+    history: List[RULPrediction] = []
+
+
 class WarrantyCreate(WarrantyBase):
     pass
 
@@ -587,6 +761,7 @@ class JobAttachmentBase(BaseModel):
     filename: str
     file_type: str
     file_size: int
+    file_url: str
     description: Optional[str] = None
 
 
@@ -594,6 +769,7 @@ class JobAttachmentCreate(BaseModel):
     filename: str
     file_type: str
     file_size: int
+    file_url: str
     description: Optional[str] = None
 
 
@@ -664,26 +840,8 @@ class MileageRecordResponse(MileageRecordBase):
         from_attributes = True
 
 
-# --- EV Fleet ---
-class EVBatteryData(BaseModel):
-    current_soh: float = Field(..., ge=0, le=100, description="State of Health %")
-    cycle_count: int = Field(..., ge=0, description="Charge cycle count")
-    avg_temperature: float = Field(default=25, description="Avg operating temp °C")
-    fast_charge_ratio: float = Field(default=0, ge=0, le=1, description="Fast charge ratio")
-    age_months: int = Field(default=12, ge=0, description="Battery age in months")
-    avg_dod: float = Field(default=50, ge=0, le=100, description="Avg depth of discharge")
-    capacity_kwh: float = Field(default=60, description="Battery capacity kWh")
-    ambient_temp_avg: float = Field(default=22, description="Avg ambient temp °C")
 
 
-class RULPrediction(BaseModel):
-    rul_months: float
-    rul_cycles: int
-    confidence: float
-    health_status: str
-    current_soh: float
-    eol_threshold: float
-    recommendations: List[str]
 
 
 # --- Analytics ---
@@ -716,6 +874,30 @@ class InvoiceAgingReport(BaseModel):
     invoices: List[Dict[str, Any]]  # Detailed invoices list
 
 
+
+# --- Audit Logging ---
+class AuditLogEntry(BaseModel):
+    """A single audit log record."""
+    id: str
+    company_id: str
+    user_id: str
+    user_name: Optional[str] = None
+    action: str          # create | update | delete | login | logout | permission_change
+    resource_type: str   # job | invoice | customer | user | company | etc.
+    resource_id: Optional[str] = None
+    changes: Optional[Dict[str, Any]] = None   # before / after values
+    ip_address: Optional[str] = None
+    timestamp: datetime
+
+
+class AuditLogCreate(BaseModel):
+    action: str
+    resource_type: str
+    resource_id: Optional[str] = None
+    changes: Optional[Dict[str, Any]] = None
+    ip_address: Optional[str] = None
+
+
 # =============================================================================
 # In-Memory Data Store (Fallback when DB not available)
 # =============================================================================
@@ -733,30 +915,305 @@ _attachments: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _labor_entries: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _mileage_records: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
 _invoice_items: Dict[str, Dict[str, dict]] = {}  # Nested by company_id
+_diagnostics: Dict[str, dict] = {}
+_battery_health: Dict[str, List[dict]] = {}
+_audit_logs: List[dict] = []   # Flat list — newest first (prepend on write)
+_portal_tokens: Dict[str, dict] = {}  # token -> { customer_id, expires_at, customer, jobs, invoices, vehicles, appointments }
 
 
-# JWT Secret (generate per-instance if not configured)
-JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
-JWT_ALGORITHM = "HS256"
+# =============================================================================
+# SQLite Persistence Layer
+# Source of Truth: SQLite database (workshop_store.db)
+# In-memory dicts are the runtime cache; they are loaded from SQLite on startup
+# and saved back periodically and on shutdown.
+# =============================================================================
 
-def create_token(user_id: str, email: str, role: str, company_id: str) -> str:
-    """Create a simple HMAC-based token."""
-    # token payload: userId:email:role:companyId:timestamp
-    payload = f"{user_id}:{email}:{role}:{company_id}:{datetime.utcnow().isoformat()}"
-    sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    return f"{payload}:{sig}"
+import sqlite3
+import json
+import asyncio
+import threading
 
-def hash_password(password: str) -> str:
-    """Hash a password with salt."""
-    salt = secrets.token_hex(16)
-    hashed = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000).hex()
-    return f"{salt}:{hashed}"
+PERSIST_DB = os.getenv("PERSIST_DB", str(Path(__file__).parent.parent / "workshop_store.db"))
 
-def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against stored hash."""
-    salt, hashed = stored.split(':')
-    check = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000).hex()
-    return hmac.compare_digest(hashed, check)
+
+def _open_persist_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(PERSIST_DB, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")  # safe concurrent reads
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS kv_store (
+            namespace TEXT NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (namespace, key)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS list_store (
+            namespace TEXT NOT NULL,
+            position INTEGER NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (namespace, position)
+        )
+    """)
+    conn.commit()
+    return conn
+
+
+_persist_conn: Optional[sqlite3.Connection] = None
+
+def _get_persist_conn() -> Optional[sqlite3.Connection]:
+    return _persist_conn
+
+
+def _load_namespace_dict(conn: sqlite3.Connection, namespace: str) -> Dict[str, dict]:
+    """Load a flat namespace from kv_store into a dict."""
+    rows = conn.execute("SELECT key, value FROM kv_store WHERE namespace = ?", (namespace,)).fetchall()
+    result: Dict[str, dict] = {}
+    for row in rows:
+        try:
+            result[row["key"]] = json.loads(row["value"])
+        except Exception:
+            pass
+    return result
+
+
+def _load_namespace_nested(conn: sqlite3.Connection, namespace: str) -> Dict[str, Dict[str, dict]]:
+    """Load a nested namespace (key = 'outer_key/inner_key') from kv_store."""
+    rows = conn.execute("SELECT key, value FROM kv_store WHERE namespace = ?", (namespace,)).fetchall()
+    result: Dict[str, Dict[str, dict]] = {}
+    for row in rows:
+        try:
+            parts = row["key"].split("/", 1)
+            if len(parts) == 2:
+                outer, inner = parts
+                result.setdefault(outer, {})[inner] = json.loads(row["value"])
+        except Exception:
+            pass
+    return result
+
+
+def _load_namespace_list(conn: sqlite3.Connection, namespace: str) -> List[dict]:
+    """Load an ordered list namespace from list_store."""
+    rows = conn.execute(
+        "SELECT value FROM list_store WHERE namespace = ? ORDER BY position",
+        (namespace,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        try:
+            result.append(json.loads(row["value"]))
+        except Exception:
+            pass
+    return result
+
+
+def _save_namespace_dict(conn: sqlite3.Connection, namespace: str, data: Dict[str, dict]) -> None:
+    conn.execute("DELETE FROM kv_store WHERE namespace = ?", (namespace,))
+    for key, value in data.items():
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO kv_store (namespace, key, value) VALUES (?, ?, ?)",
+                (namespace, key, json.dumps(value, default=str)),
+            )
+        except Exception:
+            pass
+    conn.commit()
+
+
+def _save_namespace_nested(conn: sqlite3.Connection, namespace: str, data: Dict[str, Dict[str, dict]]) -> None:
+    conn.execute("DELETE FROM kv_store WHERE namespace = ?", (namespace,))
+    for outer, inner_dict in data.items():
+        for inner, value in inner_dict.items():
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO kv_store (namespace, key, value) VALUES (?, ?, ?)",
+                    (namespace, f"{outer}/{inner}", json.dumps(value, default=str)),
+                )
+            except Exception:
+                pass
+    conn.commit()
+
+
+def _save_namespace_list(conn: sqlite3.Connection, namespace: str, data: List[dict]) -> None:
+    conn.execute("DELETE FROM list_store WHERE namespace = ?", (namespace,))
+    for i, item in enumerate(data):
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO list_store (namespace, position, value) VALUES (?, ?, ?)",
+                (namespace, i, json.dumps(item, default=str)),
+            )
+        except Exception:
+            pass
+    conn.commit()
+
+
+def load_all_from_db(conn: sqlite3.Connection) -> None:
+    """Load all persisted data into the in-memory store on startup."""
+    global _companies, _users, _customers, _vehicles, _jobs, _parts
+    global _invoices, _appointments, _warranties, _attachments
+    global _labor_entries, _mileage_records, _invoice_items, _diagnostics
+    global _battery_health, _audit_logs, _portal_tokens
+    logger.info(f"Loading persisted data from {PERSIST_DB}")
+    _companies      = _load_namespace_dict(conn, "companies") or _companies
+    _users          = _load_namespace_dict(conn, "users") or _users
+    _customers      = _load_namespace_dict(conn, "customers") or _customers
+    _vehicles       = _load_namespace_dict(conn, "vehicles") or _vehicles
+    _jobs           = _load_namespace_dict(conn, "jobs") or _jobs
+    _parts          = _load_namespace_dict(conn, "parts") or _parts
+    _invoices       = _load_namespace_dict(conn, "invoices") or _invoices
+    _diagnostics    = _load_namespace_dict(conn, "diagnostics") or _diagnostics
+    _appointments   = _load_namespace_nested(conn, "appointments") or _appointments
+    _warranties     = _load_namespace_nested(conn, "warranties") or _warranties
+    _attachments    = _load_namespace_nested(conn, "attachments") or _attachments
+    _labor_entries  = _load_namespace_nested(conn, "labor_entries") or _labor_entries
+    _mileage_records = _load_namespace_nested(conn, "mileage_records") or _mileage_records
+    _invoice_items  = _load_namespace_nested(conn, "invoice_items") or _invoice_items
+    _battery_health = _load_namespace_dict(conn, "battery_health") or _battery_health  # type: ignore
+    _audit_logs     = _load_namespace_list(conn, "audit_logs") or _audit_logs
+    _portal_tokens  = _load_namespace_dict(conn, "portal_tokens") or _portal_tokens
+    total = (len(_companies) + len(_users) + len(_customers) + len(_vehicles) +
+             len(_jobs) + len(_parts) + len(_invoices))
+    logger.info(f"Loaded {total} core records from SQLite persistence store")
+
+
+def save_all_to_db(conn: sqlite3.Connection) -> None:
+    """Flush all in-memory data to SQLite."""
+    try:
+        _save_namespace_dict(conn, "companies",    _companies)
+        _save_namespace_dict(conn, "users",        _users)
+        _save_namespace_dict(conn, "customers",    _customers)
+        _save_namespace_dict(conn, "vehicles",     _vehicles)
+        _save_namespace_dict(conn, "jobs",         _jobs)
+        _save_namespace_dict(conn, "parts",        _parts)
+        _save_namespace_dict(conn, "invoices",     _invoices)
+        _save_namespace_dict(conn, "diagnostics",  _diagnostics)
+        _save_namespace_nested(conn, "appointments",   _appointments)
+        _save_namespace_nested(conn, "warranties",     _warranties)
+        _save_namespace_nested(conn, "attachments",    _attachments)
+        _save_namespace_nested(conn, "labor_entries",  _labor_entries)
+        _save_namespace_nested(conn, "mileage_records", _mileage_records)
+        _save_namespace_nested(conn, "invoice_items",  _invoice_items)
+        _save_namespace_dict(conn, "battery_health",   _battery_health)  # type: ignore
+        _save_namespace_list(conn, "audit_logs",       _audit_logs)
+        _save_namespace_dict(conn, "portal_tokens",     _portal_tokens)
+        logger.debug("In-memory store flushed to SQLite")
+    except Exception as e:
+        logger.error(f"Failed to persist in-memory store: {e}")
+
+
+_autosave_stop = threading.Event()
+
+def _autosave_worker(interval: int = 60) -> None:
+    """Background thread: flush store to SQLite every `interval` seconds."""
+    while not _autosave_stop.wait(timeout=interval):
+        conn = _get_persist_conn()
+        if conn:
+            save_all_to_db(conn)
+
+
+# =============================================================================
+# Application Lifespan (startup / shutdown persistence hooks)
+# =============================================================================
+
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app_instance):
+    """Load data on startup, save data on shutdown."""
+    global _persist_conn
+    _persist_conn = _open_persist_db()
+    load_all_from_db(_persist_conn)
+    # Start background autosave thread
+    t = threading.Thread(target=_autosave_worker, args=(60,), daemon=True, name="store-autosave")
+    t.start()
+    logger.info("Persistence layer initialized — SQLite is the primary store")
+    yield
+    # Shutdown: final flush
+    _autosave_stop.set()
+    save_all_to_db(_persist_conn)
+    _persist_conn.close()
+    logger.info("Persistence layer shut down — all data flushed to SQLite")
+
+
+# Re-configure app with lifespan
+app.router.lifespan_context = lifespan  # type: ignore[attr-defined]
+
+
+# =============================================================================
+# Real-Time Synchronization (WebSockets)
+# =============================================================================
+
+class ConnectionManager:
+    def __init__(self):
+        # connections grouped by company_id for efficient broadcasting
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, company_id: str):
+        await websocket.accept()
+        if company_id not in self.active_connections:
+            self.active_connections[company_id] = []
+        self.active_connections[company_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, company_id: str):
+        if company_id in self.active_connections:
+            try:
+                self.active_connections[company_id].remove(websocket)
+                if not self.active_connections[company_id]:
+                    del self.active_connections[company_id]
+            except ValueError:
+                pass
+
+    async def broadcast_to_company(self, company_id: str, message: dict):
+        if company_id in self.active_connections:
+            # Create a copy of the list to avoid "size changed during iteration" errors
+            for connection in list(self.active_connections[company_id]):
+                try:
+                    await connection.send_json(message)
+                except Exception:
+                    # connection might be closed, it will be removed by the disconnect handler
+                    pass
+
+manager = ConnectionManager()
+
+
+@app.websocket("/api/ws")
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
+    """WebSocket endpoint for real-time updates, grouped by company."""
+    try:
+        # Simple token validation (userId:email:role:companyId:timestamp:sig)
+        parts = token.split(":")
+        if len(parts) != 6:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        
+        user_id, email, role, company_id, ts, sig = parts
+        payload = f"{user_id}:{email}:{role}:{company_id}:{ts}"
+        
+        # Verify signature
+        expected_sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        await manager.connect(websocket, company_id)
+        logger.info(f"WebSocket connected: user={user_id}, company={company_id}")
+        
+        try:
+            while True:
+                # keep-alive (wait for client messages, though we primarily push)
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            manager.disconnect(websocket, company_id)
+            logger.info(f"WebSocket disconnected: user={user_id}, company={company_id}")
+            
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        try:
+            await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+        except:
+            pass
+
 
 
 # =============================================================================
@@ -783,13 +1240,17 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()):
     return Token(access_token=token, expires_in=3600)
 
 
-@app.post("/api/auth/register", response_model=UserResponse, tags=["Authentication"])
+@app.post("/api/auth/register", response_model=UserResponse, status_code=201, tags=["Authentication"])
 async def register(user: UserCreate):
     """Register a new user."""
     # Check for duplicate email
     for u in _users.values():
         if u.get("email") == user.email:
             raise HTTPException(status_code=409, detail="Email already registered")
+
+    # Enforce subscription user limit (in-memory auth path)
+    if user.company_id:
+        _enforce_user_limit_for_create(user.company_id, db=None)
     
     user_id = str(uuid.uuid4())
     user_data = {
@@ -807,22 +1268,142 @@ async def register(user: UserCreate):
 
 @app.get("/api/auth/me", response_model=UserResponse, tags=["Authentication"])
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-    """Get current authenticated user by decoding our simple token."""
+    """Get current authenticated user by decoding and VERIFYING our token."""
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    # token format: userId:email:role:companyId:timestamp:signature
-    parts = token.split(":")
+    
+    # token format: userId|email|role|companyId|timestamp|signature
+    parts = token.split("|")
     if len(parts) < 6:
         raise HTTPException(status_code=401, detail="Invalid token format")
-    user_id, email, role, company_id = parts[0], parts[1], parts[2], parts[3]
+    
+    user_id, email, role, company_id, timestamp, signature = parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]
+    
+    # Verify Signature
+    payload = f"{user_id}|{email}|{role}|{company_id}|{timestamp}"
+    expected_sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    
+    if not hmac.compare_digest(signature, expected_sig):
+        logger.warning(f"Invalid token signature attempt: user={user_id}, email={email}")
+        raise HTTPException(status_code=401, detail="Invalid token signature")
+    
+    # Verify Expiration
+    try:
+        token_time = datetime.fromisoformat(timestamp)
+        if datetime.utcnow() - token_time > timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS):
+            raise HTTPException(status_code=401, detail="Token expired")
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid token timestamp")
+        
     return UserResponse(
         id=user_id,
         email=email,
-        name="",  # not available in token
+        name="",  # name not in token for brevity
         role=role,
         company_id=company_id,
-        created_at=datetime.now(),
+        created_at=token_time,
     )
+
+
+# Quick persistence endpoint — can be called to force a manual save
+@app.post("/api/admin/persist-now", tags=["System Admin"])
+async def force_persist(current_user: UserResponse = Depends(get_current_user)):
+    """[SYSTEM_ADMIN] Manually flush the in-memory store to SQLite immediately."""
+    _require_system_admin(current_user)
+    conn = _get_persist_conn()
+    if not conn:
+        raise HTTPException(status_code=503, detail="Persistence layer not initialized")
+    save_all_to_db(conn)
+    return {"message": "In-memory store flushed to SQLite successfully", "timestamp": datetime.utcnow().isoformat()}
+
+
+# JWT Secret (generate per-instance if not configured)
+JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
+JWT_ALGORITHM = "HS256"
+
+def _get_company_max_users(company_id: str, db: Optional["Session"] = None) -> int:
+    """Return max_users for a company, defaulting to 5."""
+    try:
+        if DB_AVAILABLE and db:
+            company = db.query(DBCompany).filter(DBCompany.id == company_id).first()
+            if company and getattr(company, "max_users", None):
+                return int(company.max_users)
+    except Exception:
+        pass
+    try:
+        company = _companies.get(company_id) or {}
+        return int(company.get("max_users") or company.get("maxUsers") or 5)
+    except Exception:
+        return 5
+
+
+def _enforce_user_limit_for_invite(company_id: str, db: Optional["Session"] = None) -> None:
+    """Enforce company max_users when creating a new invitation (counts pending invites)."""
+    max_users = _get_company_max_users(company_id, db)
+
+    # Count active users
+    user_count = 0
+    pending_invites = 0
+    try:
+        if DB_AVAILABLE and db:
+            user_count = db.query(DBUser).filter(DBUser.company_id == company_id).count()
+            pending_invites = db.query(DBUserInvitation).filter(
+                DBUserInvitation.company_id == company_id,
+                DBUserInvitation.accepted_at == None,
+                DBUserInvitation.expires_at > datetime.utcnow(),
+            ).count()
+        else:
+            user_count = len([u for u in _users.values() if u.get("company_id") == company_id])
+            # in-memory invitations are DB-backed in this app; assume 0 if DB not available
+            pending_invites = 0
+    except Exception:
+        pass
+
+    if (user_count + pending_invites + 1) > max_users:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User limit reached for this subscription tier (max {max_users}). Cancel an invite or upgrade your plan.",
+        )
+
+
+def _enforce_user_limit_for_create(company_id: str, db: Optional["Session"] = None) -> None:
+    """Enforce company max_users when creating a new user account."""
+    max_users = _get_company_max_users(company_id, db)
+    user_count = 0
+    try:
+        if DB_AVAILABLE and db:
+            user_count = db.query(DBUser).filter(DBUser.company_id == company_id).count()
+        else:
+            user_count = len([u for u in _users.values() if u.get("company_id") == company_id])
+    except Exception:
+        pass
+
+    if (user_count + 1) > max_users:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User limit reached for this subscription tier (max {max_users}). Upgrade your plan to add more users.",
+        )
+
+def create_token(user_id: str, email: str, role: str, company_id: str) -> str:
+    """Create a simple HMAC-based token."""
+    # token payload: userId|email|role|companyId|timestamp
+    payload = f"{user_id}|{email}|{role}|{company_id}|{datetime.utcnow().isoformat()}"
+    sig = hmac.new(JWT_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}|{sig}"
+
+def hash_password(password: str) -> str:
+    """Hash a password with salt."""
+    salt = secrets.token_hex(16)
+    hashed = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000).hex()
+    return f"{salt}:{hashed}"
+
+def verify_password(password: str, stored: str) -> bool:
+    """Verify a password against stored hash."""
+    salt, hashed = stored.split(':')
+    check = hashlib.pbkdf2_hmac('sha256', password.encode(), salt.encode(), 100000).hex()
+    return hmac.compare_digest(hashed, check)
+
+
 
 
 # =============================================================================
@@ -906,6 +1487,278 @@ async def delete_company(
 
 
 # =============================================================================
+# Audit Log Helper
+# =============================================================================
+
+def log_audit_event(
+    company_id: str,
+    user_id: str,
+    user_name: str,
+    action: str,
+    resource_type: str,
+    resource_id: Optional[str] = None,
+    changes: Optional[Dict[str, Any]] = None,
+    ip_address: Optional[str] = None,
+) -> dict:
+    """Create and persist an audit log entry."""
+    entry = {
+        "id": str(uuid.uuid4()),
+        "company_id": company_id,
+        "user_id": user_id,
+        "user_name": user_name,
+        "action": action,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "changes": changes,
+        "ip_address": ip_address,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    _audit_logs.insert(0, entry)  # newest-first
+    if len(_audit_logs) > 5000:   # cap memory usage
+        _audit_logs.pop()
+    return entry
+
+
+# =============================================================================
+# System Admin Endpoints (SYSTEM_ADMIN role required)
+# =============================================================================
+
+def _require_system_admin(current_user: UserResponse):
+    """Raise 403 if the caller is not a SYSTEM_ADMIN."""
+    if current_user.role != UserRole.SYSTEM_ADMIN:
+        raise HTTPException(status_code=403, detail="System administrator access required")
+
+
+@app.get("/api/admin/companies", tags=["System Admin"])
+async def admin_list_all_companies(
+    search: Optional[str] = None,
+    subscription: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """[SYSTEM_ADMIN] List all companies with optional filters."""
+    _require_system_admin(current_user)
+    companies = list(_companies.values())
+    if search:
+        companies = [c for c in companies if search.lower() in c.get("name", "").lower() or search.lower() in c.get("email", "").lower()]
+    if subscription:
+        companies = [c for c in companies if c.get("subscription") == subscription]
+    if is_active is not None:
+        companies = [c for c in companies if c.get("is_active") == is_active]
+    companies.sort(key=lambda c: c.get("created_at", ""), reverse=True)
+    return {"total": len(companies), "companies": companies[skip:skip + limit]}
+
+
+@app.get("/api/admin/companies/{company_id}/usage", tags=["System Admin"])
+async def admin_company_usage(
+    company_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """[SYSTEM_ADMIN] Usage statistics for a specific company."""
+    _require_system_admin(current_user)
+    if company_id not in _companies:
+        raise HTTPException(status_code=404, detail="Company not found")
+    company = _companies[company_id]
+    users = [u for u in _users.values() if u.get("company_id") == company_id]
+    jobs = [j for j in _jobs.values() if j.get("company_id") == company_id]
+    customers = [c for c in _customers.values() if c.get("company_id") == company_id]
+    invoices = [i for i in _invoices.values() if i.get("company_id") == company_id]
+    parts = [p for p in _parts.values() if p.get("company_id") == company_id]
+    paid_invoices = [i for i in invoices if i.get("status") == "Paid"]
+    total_revenue = sum(float(i.get("total", 0)) for i in paid_invoices)
+    return {
+        "companyId": company_id,
+        "companyName": company.get("name"),
+        "subscription": company.get("subscription"),
+        "isActive": company.get("is_active"),
+        "createdAt": company.get("created_at", ""),
+        "stats": {
+            "users": len(users),
+            "maxUsers": company.get("max_users", 5),
+            "customers": len(customers),
+            "jobs": len(jobs),
+            "invoices": len(invoices),
+            "paidInvoices": len(paid_invoices),
+            "parts": len(parts),
+            "totalRevenue": round(total_revenue, 2),
+        },
+    }
+
+
+@app.get("/api/admin/dashboard", tags=["System Admin"])
+async def admin_dashboard(current_user: UserResponse = Depends(get_current_user)):
+    """[SYSTEM_ADMIN] System-wide summary dashboard."""
+    _require_system_admin(current_user)
+    total_companies = len(_companies)
+    active_companies = sum(1 for c in _companies.values() if c.get("is_active"))
+    total_users = len(_users)
+    total_jobs = len(_jobs)
+    total_invoices = len(_invoices)
+    paid_invoices = [i for i in _invoices.values() if i.get("status") == "Paid"]
+    total_revenue = sum(float(i.get("total", 0)) for i in paid_invoices)
+    subscription_breakdown: Dict[str, int] = {}
+    for c in _companies.values():
+        sub = c.get("subscription", "free")
+        subscription_breakdown[sub] = subscription_breakdown.get(sub, 0) + 1
+    return {
+        "totalCompanies": total_companies,
+        "activeCompanies": active_companies,
+        "inactiveCompanies": total_companies - active_companies,
+        "totalUsers": total_users,
+        "totalJobs": total_jobs,
+        "totalInvoices": total_invoices,
+        "totalRevenue": round(total_revenue, 2),
+        "subscriptionBreakdown": subscription_breakdown,
+        "auditLogCount": len(_audit_logs),
+    }
+
+
+@app.post("/api/admin/companies/{company_id}/toggle-active", tags=["System Admin"])
+async def admin_toggle_company_active(
+    company_id: str,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """[SYSTEM_ADMIN] Activate or deactivate a company."""
+    _require_system_admin(current_user)
+    if company_id not in _companies:
+        raise HTTPException(status_code=404, detail="Company not found")
+    was_active = _companies[company_id].get("is_active", True)
+    _companies[company_id]["is_active"] = not was_active
+    action = "activate_company" if not was_active else "deactivate_company"
+    log_audit_event(current_user.company_id, current_user.id, current_user.name,
+                    action, "company", company_id,
+                    {"before": {"is_active": was_active}, "after": {"is_active": not was_active}})
+    return {"companyId": company_id, "isActive": not was_active}
+
+
+@app.post("/api/admin/bulk-create-users", tags=["System Admin"])
+async def admin_bulk_create_users(
+    payload: Dict[str, Any],
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """[SYSTEM_ADMIN] Bulk-create users across one or more companies."""
+    _require_system_admin(current_user)
+    users_data: List[dict] = payload.get("users", [])
+    if not users_data:
+        raise HTTPException(status_code=400, detail="No users provided in payload")
+    created = []
+    errors = []
+    for u in users_data:
+        email = u.get("email", "")
+        company_id = u.get("company_id", "")
+        if not email or not company_id:
+            errors.append({"email": email, "error": "Missing email or company_id"})
+            continue
+        try:
+            _enforce_user_limit_for_create(company_id, db=None)
+        except HTTPException as e:
+            errors.append({"email": email, "error": e.detail})
+            continue
+        if any(x.get("email") == email for x in _users.values()):
+            errors.append({"email": email, "error": "Email already registered"})
+            continue
+        uid = str(uuid.uuid4())
+        raw_password = u.get("password", secrets.token_urlsafe(10))
+        user_rec = {
+            "id": uid,
+            "email": email,
+            "name": u.get("name", email.split("@")[0]),
+            "role": u.get("role", UserRole.TECHNICIAN),
+            "company_id": company_id,
+            "password_hash": hash_password(raw_password),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        _users[uid] = user_rec
+        created.append({"id": uid, "email": email, "tempPassword": raw_password})
+        log_audit_event(current_user.company_id, current_user.id, current_user.name,
+                        "create", "user", uid, {"email": email, "company_id": company_id})
+    return {"created": len(created), "errors": errors, "users": created}
+
+
+@app.get("/api/admin/system-report", tags=["System Admin"])
+async def admin_system_report(current_user: UserResponse = Depends(get_current_user)):
+    """[SYSTEM_ADMIN] Detailed system-wide stats per company."""
+    _require_system_admin(current_user)
+    report = []
+    for cid, company in _companies.items():
+        users = [u for u in _users.values() if u.get("company_id") == cid]
+        jobs = [j for j in _jobs.values() if j.get("company_id") == cid]
+        invoices = [i for i in _invoices.values() if i.get("company_id") == cid]
+        paid = [i for i in invoices if i.get("status") == "Paid"]
+        revenue = sum(float(i.get("total", 0)) for i in paid)
+        report.append({
+            "companyId": cid,
+            "name": company.get("name"),
+            "subscription": company.get("subscription"),
+            "isActive": company.get("is_active"),
+            "users": len(users),
+            "jobs": len(jobs),
+            "invoices": len(invoices),
+            "revenue": round(revenue, 2),
+        })
+    report.sort(key=lambda x: x["revenue"], reverse=True)
+    return {"companies": report, "total": len(report)}
+
+
+# =============================================================================
+# Audit Logging Endpoints
+# =============================================================================
+
+@app.post("/api/audit-logs", response_model=AuditLogEntry, status_code=201, tags=["Audit"])
+async def create_audit_log(
+    entry: AuditLogCreate,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Create a manual audit log entry (e.g. from frontend)."""
+    ip = request.client.host if request.client else None
+    log = log_audit_event(
+        current_user.company_id, current_user.id, current_user.name,
+        entry.action, entry.resource_type, entry.resource_id,
+        entry.changes, ip or entry.ip_address,
+    )
+    return AuditLogEntry(**log)
+
+
+@app.get("/api/audit-logs", tags=["Audit"])
+async def list_audit_logs(
+    resource_type: Optional[str] = None,
+    action: Optional[str] = None,
+    user_id: Optional[str] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """List audit logs for the current company (or all if SYSTEM_ADMIN)."""
+    logs = _audit_logs
+    if current_user.role != UserRole.SYSTEM_ADMIN:
+        logs = [l for l in logs if l.get("company_id") == current_user.company_id]
+    if resource_type:
+        logs = [l for l in logs if l.get("resource_type") == resource_type]
+    if action:
+        logs = [l for l in logs if l.get("action") == action]
+    if user_id:
+        logs = [l for l in logs if l.get("user_id") == user_id]
+    return {
+        "total": len(logs),
+        "logs": logs[skip:skip + limit],
+    }
+
+
+@app.get("/api/audit-logs/{log_id}", tags=["Audit"])
+async def get_audit_log(log_id: str, current_user: UserResponse = Depends(get_current_user)):
+    """Get a single audit log entry."""
+    for log in _audit_logs:
+        if log["id"] == log_id:
+            if current_user.role != UserRole.SYSTEM_ADMIN and log.get("company_id") != current_user.company_id:
+                raise HTTPException(status_code=403, detail="Access denied")
+            return log
+    raise HTTPException(status_code=404, detail="Audit log not found")
+
+
+# =============================================================================
 # Customers Endpoints
 # =============================================================================
 
@@ -921,7 +1774,19 @@ async def list_customers(
     company_id = current_user.company_id
     customers = [c for c in _customers.values() if c.get("company_id") == company_id]
     if search:
-        customers = [c for c in customers if search.lower() in c["name"].lower()]
+        q = search.strip().lower()
+        def _val(v: Any) -> str:
+            return str(v or "").lower()
+        customers = [
+            c for c in customers
+            if (
+                q in _val(c.get("name")) or
+                q in _val(c.get("email")) or
+                q in _val(c.get("phone")) or
+                q in _val(c.get("address")) or
+                q in _val(c.get("notes"))
+            )
+        ]
     return [CustomerResponse(**c) for c in customers[skip:skip+limit]]
 
 
@@ -937,6 +1802,7 @@ async def create_customer(customer: CustomerCreate, current_user: UserResponse =
         "vehicle_count": 0,
     }
     _customers[customer_id] = customer_data
+    await manager.broadcast_to_company(current_user.company_id, {"event": "customer_created", "data": customer_data})
     return CustomerResponse(**customer_data)
 
 
@@ -968,6 +1834,163 @@ async def delete_customer(customer_id: str, current_user: UserResponse = Depends
     if not cust or cust.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Customer not found")
     del _customers[customer_id]
+    await manager.broadcast_to_company(current_user.company_id, {"event": "customer_deleted", "data": {"id": customer_id}})
+    return
+
+
+# =============================================================================
+# Customer Portal (Public - token-based access)
+# =============================================================================
+
+class PortalTokenCreate(BaseModel):
+    customer_id: str
+    customer: Optional[dict] = None
+    jobs: Optional[List[dict]] = None
+    invoices: Optional[List[dict]] = None
+    vehicles: Optional[List[dict]] = None
+    appointments: Optional[List[dict]] = None
+
+
+@app.post("/api/portal/token", tags=["Customer Portal"])
+async def create_portal_token(
+    body: PortalTokenCreate,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Create a portal access token for a customer. Staff only."""
+    cust = _customers.get(body.customer_id)
+    if not cust or cust.get("company_id") != current_user.company_id:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now() + timedelta(days=7)).isoformat()
+    payload = {
+        "customer_id": body.customer_id,
+        "expires_at": expires_at,
+        "customer": body.customer or cust,
+        "jobs": body.jobs or [j for j in _jobs.values() if j.get("customer_id") == body.customer_id],
+        "invoices": body.invoices or [i for i in _invoices.values() if i.get("customer_id") == body.customer_id],
+        "vehicles": body.vehicles or [v for v in _vehicles.values() if v.get("owner_id") == body.customer_id],
+        "appointments": body.appointments or [
+            a for company_appts in _appointments.values() for a in company_appts.values()
+            if a.get("customer_id") == body.customer_id
+        ],
+    }
+    _portal_tokens[token] = payload
+    base_url = os.getenv("PORTAL_BASE_URL", "http://localhost:3000")
+    return {"token": token, "url": f"{base_url}/#/portal?token={token}", "expires_at": expires_at}
+
+
+@app.get("/api/portal/me", tags=["Customer Portal"])
+async def portal_me(token: str = Query(...)):
+    """Get customer portal data for a valid token. No auth required."""
+    payload = _portal_tokens.get(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    expires_at = payload.get("expires_at")
+    if expires_at:
+        try:
+            exp_dt = datetime.fromisoformat(expires_at.replace("Z", ""))
+            if exp_dt < datetime.now():
+                del _portal_tokens[token]
+                raise HTTPException(status_code=401, detail="Token expired")
+        except (ValueError, TypeError):
+            pass
+    return payload
+
+
+@app.post("/api/portal/accept-quote", tags=["Customer Portal"])
+async def portal_accept_quote(
+    invoice_id: str = Query(...),
+    token: str = Query(...),
+):
+    """Accept a quote from the customer portal."""
+    payload = _portal_tokens.get(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    customer_id = payload.get("customer_id")
+    inv = _invoices.get(invoice_id)
+    if not inv and payload.get("invoices"):
+        inv = next((i for i in payload["invoices"] if i.get("id") == invoice_id), None)
+    if not inv or inv.get("customer_id") != customer_id or inv.get("type") != "Quote":
+        raise HTTPException(status_code=404, detail="Quote not found")
+    if inv.get("status") not in ("Draft", "Sent"):
+        raise HTTPException(status_code=400, detail="Quote not in acceptable state")
+    inv["status"] = "Accepted"
+    if invoice_id in _invoices:
+        _invoices[invoice_id]["status"] = "Accepted"
+    return {"success": True, "invoice_id": invoice_id}
+
+
+@app.post("/api/portal/book-appointment", tags=["Customer Portal"])
+async def portal_book_appointment(
+    token: str = Query(...),
+    title: str = Query(...),
+    start: str = Query(...),
+    end: str = Query(...),
+    type: str = Query("Service"),
+    vehicle_id: Optional[str] = Query(None),
+):
+    """Book an appointment from the customer portal."""
+    payload = _portal_tokens.get(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    customer_id = payload.get("customer_id")
+    cust = _customers.get(customer_id) or payload.get("customer")
+    if not cust:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    company_id = cust.get("company_id", "") if isinstance(cust, dict) else ""
+    if company_id not in _appointments:
+        _appointments[company_id] = {}
+    appt_id = f"APT-{uuid.uuid4().hex[:8]}"
+    appt_data = {
+        "id": appt_id,
+        "title": title,
+        "customer_id": customer_id,
+        "vehicle_id": vehicle_id or "",
+        "start": start,
+        "end": end,
+        "type": type,
+        "status": "Scheduled",
+        "recurrence": "None",
+    }
+    _appointments[company_id][appt_id] = appt_data
+    payload.setdefault("appointments", []).append(appt_data)
+    return {"success": True, "appointment": appt_data}
+
+
+@app.get("/api/portal/payment-url", tags=["Customer Portal"])
+async def portal_payment_url(
+    invoice_id: str = Query(...),
+    token: str = Query(...),
+):
+    """Get PayFast payment URL for an invoice. No auth required."""
+    payload = _portal_tokens.get(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    customer_id = payload.get("customer_id")
+    inv = _invoices.get(invoice_id)
+    if not inv or inv.get("customer_id") != customer_id or inv.get("type") != "Invoice":
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    if inv.get("status") == "Paid":
+        raise HTTPException(status_code=400, detail="Invoice already paid")
+    cust = payload.get("customer") or _customers.get(customer_id)
+    if not cust:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    base_url = os.getenv("PORTAL_BASE_URL", "http://localhost:3000")
+    return_url = f"{base_url}/#/portal?token={token}&paid=1"
+    cancel_url = f"{base_url}/#/portal?token={token}"
+    notify_url = f"{os.getenv('API_BASE_URL', 'http://localhost:8000')}/api/payment/notify"
+    url = payfast_service.generate_payment_url(
+        invoice_id=invoice_id,
+        invoice_number=inv.get("number", "INV"),
+        amount=float(inv.get("total", 0)),
+        customer_email=cust.get("email", ""),
+        customer_name=cust.get("name", ""),
+        description=f"Invoice {inv.get('number', '')}",
+        return_url=return_url,
+        cancel_url=cancel_url,
+        notify_url=notify_url,
+    )
+    return {"url": url}
 
 
 # =============================================================================
@@ -979,6 +2002,7 @@ async def list_vehicles(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
     owner_id: Optional[str] = None,
+    search: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
 ):
     """List all vehicles for the user's company with optional filtering by owner."""
@@ -987,6 +2011,24 @@ async def list_vehicles(
                 if _customers.get(v.get("owner_id"), {}).get("company_id") == company_id]
     if owner_id:
         vehicles = [v for v in vehicles if v.get("owner_id") == owner_id]
+    if search:
+        q = search.strip().lower()
+        def _val(v: Any) -> str:
+            return str(v or "").lower()
+        def _matches(v: dict) -> bool:
+            owner = _customers.get(v.get("owner_id") or "") or {}
+            return q in " ".join([
+                _val(v.get("registration")),
+                _val(v.get("vin")),
+                _val(v.get("make")),
+                _val(v.get("model")),
+                _val(v.get("color")),
+                _val(v.get("fuel_type") or v.get("fuelType")),
+                _val(owner.get("name")),
+                _val(owner.get("email")),
+                _val(owner.get("phone")),
+            ])
+        vehicles = [v for v in vehicles if _matches(v)]
     return [VehicleResponse(**v) for v in vehicles[skip:skip+limit]]
 
 
@@ -1043,6 +2085,794 @@ async def delete_vehicle(vehicle_id: str, current_user: UserResponse = Depends(g
     if not owner or owner.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Vehicle not found")
     del _vehicles[vehicle_id]
+
+
+# =============================================================================
+# Diagnostic & EV Battery Analysis Endpoints
+# =============================================================================
+
+@app.get("/api/diagnostics", response_model=List[DiagnosticResponse], tags=["Diagnostics"])
+async def list_diagnostics(
+    vehicle_id: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """List diagnostic records for the user's company."""
+    company_id = current_user.company_id
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            query = db.query(DBDiagnostic).join(DBVehicle).filter(DBVehicle.company_id == company_id)
+            if vehicle_id:
+                query = query.filter(DBDiagnostic.vehicle_id == vehicle_id)
+            records = query.order_by(DBDiagnostic.recorded_at.desc()).all()
+            return [DiagnosticResponse.from_orm(r) for r in records]
+    else:
+        results = [d for d in _diagnostics.values() 
+                   if _vehicles.get(d.get("vehicle_id"), {}).get("company_id") == company_id]
+        if vehicle_id:
+            results = [d for d in results if d.get("vehicle_id") == vehicle_id]
+        return [DiagnosticResponse(**d) for d in results]
+
+
+@app.post("/api/diagnostics", response_model=DiagnosticResponse, status_code=201, tags=["Diagnostics"])
+async def create_diagnostic(
+    record: DiagnosticCreate,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Create a new diagnostic record and trigger AI analysis."""
+    company_id = current_user.company_id
+    vehicle_id = record.vehicle_id
+    
+    # Verify vehicle exists and belongs to company
+    vehicle = _vehicles.get(vehicle_id)
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            db_vehicle = db.query(DBVehicle).filter(DBVehicle.id == vehicle_id, DBVehicle.company_id == company_id).first()
+            if not db_vehicle:
+                raise HTTPException(status_code=404, detail="Vehicle not found")
+            vehicle = db_vehicle
+    elif not vehicle or vehicle.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+
+    diagnostic_id = str(uuid.uuid4())
+    ai_analysis = ""
+    
+    # If EV battery telemetry is provided, trigger RUL prediction
+    if record.battery_telemetry:
+        model = get_model()
+        prediction = model.predict(record.battery_telemetry.model_dump())
+        
+        # Save RUL prediction to history
+        if DB_AVAILABLE:
+            with get_db_context() as db:
+                db_rul = DBEVBatteryRUL(
+                    id=str(uuid.uuid4()),
+                    vehicle_id=vehicle_id,
+                    diagnostic_id=diagnostic_id,
+                    rul_months=prediction['rul_months'],
+                    confidence=prediction['confidence'],
+                    health_status=prediction['health_status'],
+                    current_soh=prediction['current_soh'],
+                    recommendations=prediction['recommendations']
+                )
+                db.add(db_rul)
+                db.commit()
+                # Update vehicle SOH
+                db_vehicle = db.query(DBVehicle).filter(DBVehicle.id == vehicle_id).first()
+                if db_vehicle:
+                    db_vehicle.battery_soh = prediction['current_soh']
+                    db.commit()
+        else:
+            if vehicle_id not in _battery_health:
+                _battery_health[vehicle_id] = []
+            _battery_health[vehicle_id].insert(0, prediction) # Insert at beginning for "current"
+            if vehicle_id in _vehicles:
+                _vehicles[vehicle_id]['battery_soh'] = prediction['current_soh']
+
+    diagnostic_data = {
+        "id": diagnostic_id,
+        **record.model_dump(exclude={"battery_telemetry"}),
+        "battery_telemetry": record.battery_telemetry.model_dump() if record.battery_telemetry else None,
+        "ai_analysis": ai_analysis,
+        "recorded_at": datetime.utcnow(),
+    }
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            db_diag = DBDiagnostic(
+                id=diagnostic_id,
+                vehicle_id=vehicle_id,
+                symptoms=record.symptoms,
+                dtc_codes=record.dtc_codes,
+                battery_telemetry=record.battery_telemetry.model_dump() if record.battery_telemetry else None,
+                ai_analysis=ai_analysis
+            )
+            db.add(db_diag)
+            db.commit()
+    else:
+        _diagnostics[diagnostic_id] = diagnostic_data
+        
+    return DiagnosticResponse(**diagnostic_data)
+
+
+@app.get("/api/vehicles/{vehicle_id}/battery-health", response_model=BatteryHealthResponse, tags=["Diagnostics"])
+async def get_battery_health(
+    vehicle_id: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Get the current battery health and prediction history for an EV."""
+    company_id = current_user.company_id
+    
+    # Verify vehicle ownership
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            vehicle = db.query(DBVehicle).filter(DBVehicle.id == vehicle_id, DBVehicle.company_id == company_id).first()
+            if not vehicle:
+                raise HTTPException(status_code=404, detail="Vehicle not found")
+            
+            history = db.query(DBEVBatteryRUL).filter(DBEVBatteryRUL.vehicle_id == vehicle_id).order_by(DBEVBatteryRUL.recorded_at.desc()).all()
+            
+            # Helper to convert DB model to dict for Pydantic
+            def to_dict(obj):
+                return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
+
+            current = history[0] if history else None
+            return BatteryHealthResponse(
+                current=RULPrediction(**to_dict(current)) if current else None,
+                history=[RULPrediction(**to_dict(h)) for h in history]
+            )
+    else:
+        vehicle = _vehicles.get(vehicle_id)
+        if not vehicle or vehicle.get("company_id") != company_id:
+            raise HTTPException(status_code=404, detail="Vehicle not found")
+        
+        history = _battery_health.get(vehicle_id, [])
+        return BatteryHealthResponse(
+            current=RULPrediction(**history[0]) if history else None,
+            history=[RULPrediction(**h) for h in history]
+        )
+
+
+# =============================================================================
+# Technician Productivity Analytics Endpoints
+# =============================================================================
+
+@app.get("/api/analytics/technician-performance", response_model=List[TechnicianPerformance], tags=["Analytics"])
+async def get_technician_performance(
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Aggregated performance metrics for all technicians in the company."""
+    company_id = current_user.company_id
+    
+    # Filter technicians
+    techs = [u for u in _users.values() if u.get("company_id") == company_id and u.get("role") in ["TECHNICIAN", "MANAGER"]]
+    
+    performance_list = []
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            # Re-fetch techs from DB if available
+            db_techs = db.query(DBUser).filter(DBUser.company_id == company_id, DBUser.role.in_(["TECHNICIAN", "MANAGER"])).all()
+            
+            for tech in db_techs:
+                # Jobs completed
+                jobs_completed = db.query(DBJob).filter(DBJob.assigned_to == tech.id, DBJob.status.in_([JobStatusEnum.COMPLETED, JobStatusEnum.PAID])).count()
+                
+                # Labor metrics
+                labor_entries = db.query(DBLaborEntry).filter(DBLaborEntry.technician_id == tech.id).all()
+                total_hours = sum(l.hours for l in labor_entries)
+                total_revenue = sum(l.hours * l.rate_per_hour for l in labor_entries)
+                
+                # Quality metrics (associated warranties)
+                warranty_claims = db.query(DBWarranty).join(DBJob).filter(DBJob.assigned_to == tech.id).count()
+                
+                # Calculate Utilization (Assume 160 standard hours / month for demo)
+                utilization = min(100.0, (total_hours / 160.0) * 100.0) if total_hours > 0 else 0.0
+                quality_score = max(0.0, (1.0 - (warranty_claims / max(1, jobs_completed))) * 100.0)
+
+                performance_list.append(TechnicianPerformance(
+                    technician_id=tech.id,
+                    technician_name=tech.name,
+                    jobs_completed=jobs_completed,
+                    avg_time_per_job=total_hours / max(1, jobs_completed),
+                    revenue_generated=total_revenue,
+                    utilization_rate=utilization,
+                    quality_score=quality_score,
+                    warranty_claims=warranty_claims
+                ))
+    else:
+        for tech in techs:
+            tech_id = tech["id"]
+            # Jobs completed
+            tech_jobs = [j for j in _jobs.values() if j.get("assigned_to") == tech_id and j.get("status") in ["Completed", "Paid"]]
+            jobs_completed = len(tech_jobs)
+            
+            # Labor metrics from nested dict
+            total_hours = 0.0
+            total_revenue = 0.0
+            for company_entries in _labor_entries.values():
+                for entry in company_entries.values():
+                    if entry.get("technician_id") == tech_id:
+                        total_hours += entry.get("hours", 0)
+                        total_revenue += entry.get("hours", 0) * entry.get("rate_per_hour", 500)
+            
+            # Quality metrics (associated warranties)
+            # Warranty data structure not fully clear for mock, let's assume 0 for now
+            warranty_claims = 0
+            
+            # Calculate Utilization
+            utilization = min(100.0, (total_hours / 160.0) * 100.0) if total_hours > 0 else 0.0
+            quality_score = 100.0 # Default
+
+            performance_list.append(TechnicianPerformance(
+                technician_id=tech_id,
+                technician_name=tech["name"],
+                jobs_completed=jobs_completed,
+                avg_time_per_job=total_hours / max(1, jobs_completed),
+                revenue_generated=total_revenue,
+                utilization_rate=utilization,
+                quality_score=quality_score,
+                warranty_claims=warranty_claims
+            ))
+            
+    return performance_list
+
+
+@app.get("/api/analytics/technician/{user_id}/jobs", response_model=List[TechnicianJobAnalytics], tags=["Analytics"])
+async def get_technician_jobs_analytics(
+    user_id: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Detailed job history for a specific technician."""
+    company_id = current_user.company_id
+    
+    analytics = []
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            jobs = db.query(DBJob).filter(DBJob.assigned_to == user_id, DBJob.company_id == company_id).all()
+            for job in jobs:
+                hours = sum(l.hours for l in job.labor_log if l.technician_id == user_id)
+                revenue = sum(l.hours * l.rate_per_hour for l in job.labor_log if l.technician_id == user_id)
+                analytics.append(TechnicianJobAnalytics(
+                    job_id=job.id,
+                    job_number=job.job_number,
+                    service_type=job.service_type,
+                    status=job.status,
+                    hours_logged=hours,
+                    revenue=revenue,
+                    completed_at=job.completed_at
+                ))
+    else:
+        for job in _jobs.values():
+            if job.get("assigned_to") == user_id:
+                # Search for labor entries associated with this job AND this tech
+                hours = 0.0
+                revenue = 0.0
+                for company_entries in _labor_entries.values():
+                    for entry in company_entries.values():
+                        if entry.get("job_id") == job["id"] and entry.get("technician_id") == user_id:
+                            hours += entry.get("hours", 0)
+                            revenue += entry.get("hours", 0) * entry.get("rate_per_hour", 500)
+                
+                analytics.append(TechnicianJobAnalytics(
+                    job_id=job["id"],
+                    job_number=job["job_number"],
+                    service_type=job["service_type"],
+                    status=job["status"],
+                    hours_logged=hours,
+                    revenue=revenue,
+                    completed_at=job.get("completed_at")
+                ))
+                
+    return analytics
+
+
+@app.get("/api/analytics/technician/{user_id}/revenue", response_model=TechnicianRevenueAnalytics, tags=["Analytics"])
+async def get_technician_revenue_analytics(
+    user_id: str,
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Revenue statistics for a specific technician."""
+    company_id = current_user.company_id
+    
+    total_rev = 0.0
+    labor_rev = 0.0
+    parts_rev = 0.0 # Typically technicians don't "generate" parts revenue, but we can track jobs they worked on
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            labor_entries = db.query(DBLaborEntry).filter(DBLaborEntry.technician_id == user_id).all()
+            labor_rev = sum(l.hours * l.rate_per_hour for l in labor_entries)
+            total_rev = labor_rev
+    else:
+        for company_entries in _labor_entries.values():
+            for entry in company_entries.values():
+                if entry.get("technician_id") == user_id:
+                    labor_rev += entry.get("hours", 0) * entry.get("rate_per_hour", 500)
+        total_rev = labor_rev
+        
+    return TechnicianRevenueAnalytics(
+        technician_id=user_id,
+        total_revenue=total_rev,
+        labor_revenue=labor_rev,
+        parts_revenue=parts_rev,
+        period="Monthly"
+    )
+
+
+@app.get("/api/analytics/time-accuracy", response_model=TimeTrackingAnalytics, tags=["Analytics"])
+async def get_time_accuracy_analytics(
+    current_user: UserResponse = Depends(get_current_user)
+):
+    """Analyze estimation accuracy and job durations by service type."""
+    company_id = current_user.company_id
+    
+    if DB_AVAILABLE:
+        with get_db_context() as db:
+            jobs = db.query(DBJob).filter(DBJob.company_id == company_id, DBJob.status.in_([JobStatusEnum.COMPLETED, JobStatusEnum.PAID])).all()
+            
+            # Group by service type
+            service_stats = {}
+            bottlenecks = []
+            
+            for job in jobs:
+                actual = job.actual_hours
+                est = job.estimated_hours
+                variance = actual - est
+                
+                if job.service_type not in service_stats:
+                    service_stats[job.service_type] = {
+                        "est": 0.0, "act": 0.0, "count": 0, "var": 0.0
+                    }
+                
+                service_stats[job.service_type]["est"] += est
+                service_stats[job.service_type]["act"] += actual
+                service_stats[job.service_type]["var"] += variance
+                service_stats[job.service_type]["count"] += 1
+                
+                # Possible bottleneck if actual > estimated
+                if variance > 0:
+                    bottlenecks.append({
+                        "job_id": job.id,
+                        "job_number": job.job_number,
+                        "service_type": job.service_type,
+                        "estimated": est,
+                        "actual": actual,
+                        "variance": variance
+                    })
+            
+            metrics = []
+            total_est = 0.0
+            total_act = 0.0
+            
+            for s_type, stats in service_stats.items():
+                count = stats["count"]
+                avg_est = stats["est"] / count
+                avg_act = stats["act"] / count
+                avg_var = stats["var"] / count
+                
+                total_est += stats["est"]
+                total_act += stats["act"]
+                
+                # Accuracy: 100% means actual == estimated
+                accuracy = (min(avg_est, avg_act) / max(0.1, max(avg_est, avg_act))) * 100.0
+                
+                metrics.append(TimeAccuracyMetric(
+                    service_type=s_type,
+                    avg_estimated_hours=avg_est,
+                    avg_actual_hours=avg_act,
+                    avg_variance=avg_var,
+                    accuracy_percentage=accuracy,
+                    job_count=count
+                ))
+            
+            overall_accuracy = (min(total_est, total_act) / max(0.1, max(total_est, total_act))) * 100.0 if total_act > 0 else 100.0
+            
+            return TimeTrackingAnalytics(
+                overall_accuracy=overall_accuracy,
+                metrics_by_service=metrics,
+                top_bottlenecks=sorted(bottlenecks, key=lambda x: x["variance"], reverse=True)[:5]
+            )
+    else:
+        # Mock implementation for demo
+        import random
+        service_types = ["Oil Change", "Brake Pad Replacement", "Diagnostic", "Engine Overhaul"]
+        metrics = []
+        for s in service_types:
+            metrics.append(TimeAccuracyMetric(
+                service_type=s,
+                avg_estimated_hours=2.0 + random.random()*2,
+                avg_actual_hours=2.0 + random.random()*3,
+                avg_variance=random.random(),
+                accuracy_percentage=85.0 + random.random()*10,
+                job_count=5 + random.randint(1, 10)
+            ))
+        
+        return TimeTrackingAnalytics(
+            overall_accuracy=88.5,
+            metrics_by_service=metrics,
+            top_bottlenecks=[
+                {"job_number": "JOB-101", "service_type": "Engine Overhaul", "estimated": 12.0, "actual": 15.5, "variance": 3.5},
+                {"job_number": "JOB-105", "service_type": "Complex Diagnostic", "estimated": 2.0, "actual": 4.5, "variance": 2.5}
+            ]
+        )
+
+
+# =============================================================================
+# Parts Usage & Customer Value Analytics Endpoints
+# =============================================================================
+
+@app.get("/api/analytics/parts-usage", tags=["Analytics"])
+async def get_parts_usage_analytics(current_user: UserResponse = Depends(get_current_user)):
+    """Parts consumption trends, usage counts, and cost analysis by service type."""
+    company_jobs = [j for j in _jobs.values() if j.get("company_id") == current_user.company_id]
+
+    part_counts: Dict[str, dict] = {}
+    service_part_cost: Dict[str, float] = {}
+    service_job_count: Dict[str, int] = {}
+
+    for job in company_jobs:
+        service = job.get("service_type", "Other")
+        service_job_count[service] = service_job_count.get(service, 0) + 1
+        parts_used = job.get("partsUsed") or job.get("parts_used") or []
+        for pu in parts_used:
+            part_name = pu.get("name") or "Unknown"
+            qty = int(pu.get("quantity") or pu.get("qty") or 1)
+            unit_cost = float(pu.get("unitCost") or pu.get("unit_cost") or 0)
+            total_cost = qty * unit_cost
+            if part_name not in part_counts:
+                part_counts[part_name] = {"name": part_name, "timesUsed": 0, "totalQuantity": 0, "totalCost": 0.0}
+            part_counts[part_name]["timesUsed"] += 1
+            part_counts[part_name]["totalQuantity"] += qty
+            part_counts[part_name]["totalCost"] += total_cost
+            service_part_cost[service] = service_part_cost.get(service, 0.0) + total_cost
+
+    top_parts = sorted(part_counts.values(), key=lambda x: x["timesUsed"], reverse=True)[:20]
+
+    cost_by_service = sorted([
+        {
+            "serviceType": svc,
+            "totalPartsCost": round(service_part_cost.get(svc, 0), 2),
+            "jobCount": cnt,
+            "avgPartsCostPerJob": round(service_part_cost.get(svc, 0) / max(cnt, 1), 2),
+        }
+        for svc, cnt in service_job_count.items()
+    ], key=lambda x: x["totalPartsCost"], reverse=True)
+
+    all_parts = [p for p in _parts.values() if p.get("company_id") == current_user.company_id]
+    turnover = sorted([
+        {
+            "name": p.get("name"),
+            "sku": p.get("sku"),
+            "currentStock": p.get("quantity", 0),
+            "totalUsed": part_counts.get(p.get("name", ""), {}).get("totalQuantity", 0),
+            "turnoverRate": round(part_counts.get(p.get("name", ""), {}).get("totalQuantity", 0) / max(p.get("quantity", 1), 1), 2),
+            "isLowStock": p.get("quantity", 0) <= p.get("min_level", 5),
+        }
+        for p in all_parts
+    ], key=lambda x: x["totalUsed"], reverse=True)[:20]
+
+    return {
+        "topParts": top_parts,
+        "costByServiceType": cost_by_service,
+        "stockTurnover": turnover,
+        "totalUniqueParts": len(part_counts),
+        "totalPartsTransactions": sum(p["timesUsed"] for p in part_counts.values()),
+    }
+
+
+@app.get("/api/analytics/customer-value", tags=["Analytics"])
+async def get_customer_value_analytics(current_user: UserResponse = Depends(get_current_user)):
+    """Customer lifetime value metrics: total spend, visit frequency, churn risk."""
+    company_jobs = [j for j in _jobs.values() if j.get("company_id") == current_user.company_id]
+    company_invoices = [i for i in _invoices.values() if i.get("company_id") == current_user.company_id and i.get("status") == "Paid"]
+    company_customers = [c for c in _customers.values() if c.get("company_id") == current_user.company_id]
+    now = datetime.utcnow()
+
+    customer_stats: Dict[str, dict] = {
+        c["id"]: {
+            "customerId": c["id"], "name": c.get("name", "Unknown"), "email": c.get("email", ""),
+            "totalSpend": 0.0, "invoiceCount": 0, "jobCount": 0, "avgTransactionValue": 0.0,
+            "firstVisit": None, "lastVisit": None, "daysSinceLastVisit": None,
+            "visitFrequencyDays": None, "churnRiskScore": 0, "churnRiskLabel": "Low",
+        }
+        for c in company_customers
+    }
+
+    for invoice in company_invoices:
+        cid = invoice.get("customer_id")
+        if cid not in customer_stats:
+            continue
+        stats = customer_stats[cid]
+        stats["totalSpend"] += float(invoice.get("total", invoice.get("amount", 0)))
+        stats["invoiceCount"] += 1
+        date_str = invoice.get("issue_date") or invoice.get("created_at")
+        if date_str:
+            try:
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+                if stats["firstVisit"] is None or dt < stats["firstVisit"]:
+                    stats["firstVisit"] = dt
+                if stats["lastVisit"] is None or dt > stats["lastVisit"]:
+                    stats["lastVisit"] = dt
+            except Exception:
+                pass
+
+    for job in company_jobs:
+        cid = job.get("customer_id")
+        if cid in customer_stats:
+            customer_stats[cid]["jobCount"] += 1
+
+    results = []
+    for stats in customer_stats.values():
+        if stats["invoiceCount"] > 0:
+            stats["avgTransactionValue"] = round(stats["totalSpend"] / stats["invoiceCount"], 2)
+        if stats["lastVisit"]:
+            days_since = (now - stats["lastVisit"]).days
+            stats["daysSinceLastVisit"] = days_since
+            if stats["invoiceCount"] > 1 and stats["firstVisit"]:
+                span = (stats["lastVisit"] - stats["firstVisit"]).days
+                stats["visitFrequencyDays"] = round(span / (stats["invoiceCount"] - 1), 1)
+            churn = 0
+            churn += 50 if days_since > 365 else 30 if days_since > 180 else 15 if days_since > 90 else 0
+            churn += 30 if stats["invoiceCount"] <= 1 else 10 if stats["invoiceCount"] <= 3 else 0
+            churn += 10 if stats["avgTransactionValue"] < 500 else 0
+            churn = min(churn, 100)
+            stats["churnRiskScore"] = churn
+            stats["churnRiskLabel"] = "Critical" if churn >= 70 else "High" if churn >= 50 else "Medium" if churn >= 30 else "Low"
+        stats["firstVisit"] = stats["firstVisit"].isoformat() if stats["firstVisit"] else None
+        stats["lastVisit"] = stats["lastVisit"].isoformat() if stats["lastVisit"] else None
+        stats["totalSpend"] = round(stats["totalSpend"], 2)
+        results.append(stats)
+
+    results.sort(key=lambda x: x["totalSpend"], reverse=True)
+    paying = [r for r in results if r["invoiceCount"] > 0]
+    total_rev = sum(r["totalSpend"] for r in paying)
+
+    return {
+        "customers": results,
+        "summary": {
+            "totalCustomers": len(results),
+            "payingCustomers": len(paying),
+            "avgLifetimeValue": round(total_rev / max(len(paying), 1), 2),
+            "totalRevenue": round(total_rev, 2),
+            "atRiskCount": len([r for r in results if r["churnRiskLabel"] in ("High", "Critical")]),
+        },
+    }
+
+
+
+# =============================================================================
+# Financial Reports Endpoints
+# =============================================================================
+
+@app.get("/api/analytics/financial/pl-statement", tags=["Analytics"])
+async def get_pl_statement(
+    year: Optional[int] = None,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Profit & Loss statement: revenue, costs, and gross profit by month."""
+    target_year = year or datetime.utcnow().year
+    company_invoices = [
+        i for i in _invoices.values()
+        if i.get("company_id") == current_user.company_id and i.get("status") == "Paid"
+    ]
+    company_jobs = [j for j in _jobs.values() if j.get("company_id") == current_user.company_id]
+
+    MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    monthly: Dict[int, dict] = {
+        m: {"month": MONTHS[m - 1], "revenue": 0.0, "partsCost": 0.0, "laborCost": 0.0, "grossProfit": 0.0}
+        for m in range(1, 13)
+    }
+
+    # Revenue from paid invoices
+    for inv in company_invoices:
+        date_str = inv.get("issue_date") or inv.get("created_at", "")
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            if dt.year == target_year:
+                monthly[dt.month]["revenue"] += float(inv.get("total", 0))
+        except Exception:
+            pass
+
+    # Costs from job parts & labour
+    for job in company_jobs:
+        date_str = job.get("created_at", "")
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            if dt.year != target_year:
+                continue
+            m = dt.month
+            for pu in (job.get("partsUsed") or job.get("parts_used") or []):
+                monthly[m]["partsCost"] += float(pu.get("unitCost") or 0) * int(pu.get("quantity") or 1)
+            for lb in (job.get("laborLog") or job.get("labor_log") or []):
+                monthly[m]["laborCost"] += float(lb.get("totalCost") or 0)
+        except Exception:
+            pass
+
+    rows = []
+    total_revenue = total_parts = total_labor = 0.0
+    for m in range(1, 13):
+        row = monthly[m]
+        total_cost = row["partsCost"] + row["laborCost"]
+        row["totalCost"] = round(total_cost, 2)
+        row["grossProfit"] = round(row["revenue"] - total_cost, 2)
+        row["margin"] = round((row["grossProfit"] / row["revenue"] * 100) if row["revenue"] else 0, 1)
+        row["revenue"] = round(row["revenue"], 2)
+        row["partsCost"] = round(row["partsCost"], 2)
+        row["laborCost"] = round(row["laborCost"], 2)
+        rows.append(row)
+        total_revenue += row["revenue"]
+        total_parts += row["partsCost"]
+        total_labor += row["laborCost"]
+
+    total_cost = total_parts + total_labor
+    return {
+        "year": target_year,
+        "monthly": rows,
+        "totals": {
+            "revenue": round(total_revenue, 2),
+            "partsCost": round(total_parts, 2),
+            "laborCost": round(total_labor, 2),
+            "totalCost": round(total_cost, 2),
+            "grossProfit": round(total_revenue - total_cost, 2),
+            "margin": round(((total_revenue - total_cost) / total_revenue * 100) if total_revenue else 0, 1),
+        },
+    }
+
+
+@app.get("/api/analytics/financial/tax-summary", tags=["Analytics"])
+async def get_tax_summary(
+    year: Optional[int] = None,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """VAT/Tax summary: taxable revenue, tax collected, and net amounts by month."""
+    target_year = year or datetime.utcnow().year
+    MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    monthly: Dict[int, dict] = {
+        m: {"month": MONTHS[m - 1], "subtotal": 0.0, "taxAmount": 0.0, "total": 0.0, "invoiceCount": 0}
+        for m in range(1, 13)
+    }
+    company_invoices = [
+        i for i in _invoices.values()
+        if i.get("company_id") == current_user.company_id and i.get("status") == "Paid"
+    ]
+    for inv in company_invoices:
+        date_str = inv.get("issue_date") or inv.get("created_at", "")
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            if dt.year != target_year:
+                continue
+            m = dt.month
+            monthly[m]["subtotal"] += float(inv.get("subtotal", 0))
+            monthly[m]["taxAmount"] += float(inv.get("tax_amount", inv.get("taxAmount", 0)))
+            monthly[m]["total"] += float(inv.get("total", 0))
+            monthly[m]["invoiceCount"] += 1
+        except Exception:
+            pass
+
+    rows = []
+    totals = {"subtotal": 0.0, "taxAmount": 0.0, "total": 0.0, "invoiceCount": 0}
+    for m in range(1, 13):
+        row = monthly[m]
+        row["subtotal"] = round(row["subtotal"], 2)
+        row["taxAmount"] = round(row["taxAmount"], 2)
+        row["total"] = round(row["total"], 2)
+        row["effectiveRate"] = round((row["taxAmount"] / row["subtotal"] * 100) if row["subtotal"] else 0, 1)
+        rows.append(row)
+        for k in totals:
+            totals[k] += row[k]  # type: ignore[operator]
+    totals["subtotal"] = round(totals["subtotal"], 2)
+    totals["taxAmount"] = round(totals["taxAmount"], 2)
+    totals["total"] = round(totals["total"], 2)
+    totals["effectiveRate"] = round((totals["taxAmount"] / totals["subtotal"] * 100) if totals["subtotal"] else 0, 1)
+
+    return {"year": target_year, "monthly": rows, "totals": totals}
+
+
+@app.get("/api/analytics/financial/monthly-revenue", tags=["Analytics"])
+async def get_monthly_revenue(
+    months: int = Query(12, ge=3, le=24),
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Rolling monthly revenue breakdown for the last N months."""
+    now = datetime.utcnow()
+    company_invoices = [
+        i for i in _invoices.values()
+        if i.get("company_id") == current_user.company_id and i.get("status") == "Paid"
+    ]
+    buckets: Dict[str, dict] = {}
+    for offset in range(months - 1, -1, -1):
+        y = now.year if now.month - offset > 0 else now.year - 1
+        m = (now.month - offset - 1) % 12 + 1
+        key = f"{y}-{m:02d}"
+        label = datetime(y, m, 1).strftime("%b %Y")
+        buckets[key] = {"key": key, "label": label, "revenue": 0.0, "invoiceCount": 0, "avgInvoiceValue": 0.0}
+
+    for inv in company_invoices:
+        date_str = inv.get("issue_date") or inv.get("created_at", "")
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+            key = f"{dt.year}-{dt.month:02d}"
+            if key in buckets:
+                buckets[key]["revenue"] += float(inv.get("total", 0))
+                buckets[key]["invoiceCount"] += 1
+        except Exception:
+            pass
+
+    rows = []
+    for b in buckets.values():
+        b["revenue"] = round(b["revenue"], 2)
+        cnt = b["invoiceCount"]
+        b["avgInvoiceValue"] = round(b["revenue"] / cnt, 2) if cnt else 0.0
+        rows.append(b)
+
+    # Month-over-month growth
+    for i in range(1, len(rows)):
+        prev = rows[i - 1]["revenue"]
+        curr = rows[i]["revenue"]
+        rows[i]["growth"] = round(((curr - prev) / prev * 100) if prev else 0, 1)
+    if rows:
+        rows[0]["growth"] = None
+
+    total_rev = sum(r["revenue"] for r in rows)
+    best_month = max(rows, key=lambda x: x["revenue"]) if rows else None
+    return {
+        "months": rows,
+        "summary": {
+            "totalRevenue": round(total_rev, 2),
+            "avgMonthlyRevenue": round(total_rev / len(rows), 2) if rows else 0,
+            "bestMonth": best_month["label"] if best_month else None,
+            "bestMonthRevenue": best_month["revenue"] if best_month else 0,
+        },
+    }
+
+
+@app.get("/api/analytics/financial/cost-by-service", tags=["Analytics"])
+async def get_cost_by_service(current_user: UserResponse = Depends(get_current_user)):
+    """Cost and revenue breakdown by service type for profitability analysis."""
+    company_jobs = [j for j in _jobs.values() if j.get("company_id") == current_user.company_id]
+    company_invoices = [
+        i for i in _invoices.values()
+        if i.get("company_id") == current_user.company_id and i.get("status") == "Paid"
+    ]
+
+    # Map job_id → invoice total
+    job_revenue: Dict[str, float] = {}
+    for inv in company_invoices:
+        jid = inv.get("job_id")
+        if jid:
+            job_revenue[jid] = job_revenue.get(jid, 0.0) + float(inv.get("total", 0))
+
+    service_map: Dict[str, dict] = {}
+    for job in company_jobs:
+        svc = job.get("service_type", "Other")
+        if svc not in service_map:
+            service_map[svc] = {
+                "serviceType": svc, "jobCount": 0, "revenue": 0.0,
+                "partsCost": 0.0, "laborCost": 0.0, "totalCost": 0.0,
+                "grossProfit": 0.0, "margin": 0.0,
+            }
+        rec = service_map[svc]
+        rec["jobCount"] += 1
+        rec["revenue"] += job_revenue.get(job["id"], float(job.get("estimated_cost", job.get("estimatedCost", 0))))
+        for pu in (job.get("partsUsed") or job.get("parts_used") or []):
+            rec["partsCost"] += float(pu.get("unitCost") or 0) * int(pu.get("quantity") or 1)
+        for lb in (job.get("laborLog") or job.get("labor_log") or []):
+            rec["laborCost"] += float(lb.get("totalCost") or 0)
+
+    rows = []
+    for rec in service_map.values():
+        rec["totalCost"] = round(rec["partsCost"] + rec["laborCost"], 2)
+        rec["grossProfit"] = round(rec["revenue"] - rec["totalCost"], 2)
+        rec["margin"] = round((rec["grossProfit"] / rec["revenue"] * 100) if rec["revenue"] else 0, 1)
+        rec["revenue"] = round(rec["revenue"], 2)
+        rec["partsCost"] = round(rec["partsCost"], 2)
+        rec["laborCost"] = round(rec["laborCost"], 2)
+        rows.append(rec)
+
+    rows.sort(key=lambda x: x["revenue"], reverse=True)
+    return {"services": rows, "totalServices": len(rows)}
 
 
 # =============================================================================
@@ -1152,6 +2982,7 @@ async def list_jobs(
     limit: int = Query(50, ge=1, le=100),
     status: Optional[JobStatus] = None,
     priority: Optional[Priority] = None,
+    search: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
 ):
     """List all jobs with optional filtering."""
@@ -1162,6 +2993,30 @@ async def list_jobs(
         jobs = [j for j in jobs if j.get("status") == status]
     if priority:
         jobs = [j for j in jobs if j.get("priority") == priority]
+    if search:
+        q = search.strip().lower()
+        def _val(v: Any) -> str:
+            return str(v or "").lower()
+        def _matches(job: dict) -> bool:
+            cust = _customers.get(job.get("customer_id") or "") or {}
+            veh = _vehicles.get(job.get("vehicle_id") or "") or {}
+            hay = " ".join([
+                _val(job.get("id")),
+                _val(job.get("service_type") or job.get("serviceType")),
+                _val(job.get("description")),
+                _val(job.get("notes")),
+                _val(job.get("status")),
+                _val(job.get("priority")),
+                _val(cust.get("name")),
+                _val(cust.get("email")),
+                _val(cust.get("phone")),
+                _val(veh.get("registration")),
+                _val(veh.get("vin")),
+                _val(veh.get("make")),
+                _val(veh.get("model")),
+            ])
+            return q in hay
+        jobs = [j for j in jobs if _matches(j)]
     return [JobResponse(**j) for j in jobs[skip:skip+limit]]
 
 
@@ -1209,6 +3064,7 @@ async def create_job(job: JobCreate, current_user: UserResponse = Depends(get_cu
     except Exception as e:
         logger.warning(f"Failed to queue job received message: {e}")
     
+    await manager.broadcast_to_company(current_user.company_id, {"event": "job_created", "data": job_data})
     return JobResponse(**job_data)
 
 
@@ -1233,9 +3089,12 @@ async def update_job(job_id: str, update: JobUpdate, current_user: UserResponse 
     update_data = update.model_dump(exclude_unset=True)
     job_data.update(update_data)
     
-    # Set completed_at if status changed to Completed or Paid
+    # Automate started_at and completed_at tracking
+    if update.status == JobStatus.IN_PROGRESS and not job_data.get("started_at"):
+        job_data["started_at"] = datetime.utcnow()
+    
     if update.status in [JobStatus.COMPLETED, JobStatus.PAID]:
-        job_data["completed_at"] = datetime.now()
+        job_data["completed_at"] = datetime.utcnow()
     
     # Send status change messages asynchronously
     new_status = update_data.get('status')
@@ -1278,6 +3137,7 @@ async def update_job(job_id: str, update: JobUpdate, current_user: UserResponse 
         except Exception as e:
             logger.warning(f"Failed to queue job status message: {e}")
     
+    await manager.broadcast_to_company(current_user.company_id, {"event": "job_updated", "data": job_data})
     return JobResponse(**job_data)
 
 
@@ -1288,6 +3148,8 @@ async def delete_job(job_id: str, current_user: UserResponse = Depends(get_curre
     if not job or job.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Job not found")
     del _jobs[job_id]
+    await manager.broadcast_to_company(current_user.company_id, {"event": "job_deleted", "data": {"id": job_id}})
+    return
 
 
 @app.post("/api/jobs/{job_id}/tasks", response_model=JobResponse, tags=["Jobs"])
@@ -1298,6 +3160,7 @@ async def add_job_task(job_id: str, task: JobTask, current_user: UserResponse = 
         raise HTTPException(status_code=404, detail="Job not found")
     
     job.setdefault("tasks", []).append(task.model_dump())
+    await manager.broadcast_to_company(current_user.company_id, {"event": "job_updated", "data": job})
     return JobResponse(**job)
 
 
@@ -1313,6 +3176,7 @@ async def update_job_task(job_id: str, task_id: str, completed: bool, current_us
             task["completed"] = completed
             break
     
+    await manager.broadcast_to_company(current_user.company_id, {"event": "job_updated", "data": job})
     return JobResponse(**job)
 
 
@@ -1341,8 +3205,9 @@ async def update_job_part(job_id: str, part_usage_id: str, update: JobPartUpdate
 
     # Adjust job estimated_cost by delta
     new_total = part_item["totalCost"]
-    job["estimated_cost"] = job.get("estimated_cost", 0) + (new_total - old_total)
-
+    job["estimated_cost"] = job.get("estimated_cost", 0) - old_total + new_total
+    
+    await manager.broadcast_to_company(current_user.company_id, {"event": "job_updated", "data": job})
     return JobResponse(**job)
 
 
@@ -1356,6 +3221,7 @@ async def list_parts(
     limit: int = Query(50, ge=1, le=100),
     category: Optional[str] = None,
     low_stock: bool = False,
+    search: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
 ):
     """List all parts for the user's company with optional filtering."""
@@ -1370,6 +3236,20 @@ async def list_parts(
         parts = [p for p in parts if p.get("category") == category]
     if low_stock:
         parts = [p for p in parts if p["is_low_stock"]]
+    if search:
+        q = search.strip().lower()
+        def _val(v: Any) -> str:
+            return str(v or "").lower()
+        parts = [
+            p for p in parts
+            if (
+                q in _val(p.get("name")) or
+                q in _val(p.get("sku")) or
+                q in _val(p.get("category")) or
+                q in _val(p.get("supplier")) or
+                q in _val(p.get("location"))
+            )
+        ]
     
     return [PartResponse(**p) for p in parts[skip:skip+limit]]
 
@@ -1385,6 +3265,7 @@ async def create_part(part: PartCreate, current_user: UserResponse = Depends(get
         "company_id": current_user.company_id,
     }
     _parts[part_id] = part_data
+    await manager.broadcast_to_company(current_user.company_id, {"event": "part_created", "data": part_data})
     return PartResponse(**part_data)
 
 
@@ -1397,6 +3278,7 @@ async def get_part(part_id: str, current_user: UserResponse = Depends(get_curren
     if part.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Part not found")
     part["is_low_stock"] = part["quantity"] <= part["min_level"]
+    await manager.broadcast_to_company(current_user.company_id, {"event": "part_updated", "data": part})
     return PartResponse(**part)
 
 
@@ -1412,7 +3294,7 @@ async def update_part(part_id: str, update: PartUpdate, current_user: UserRespon
     update_data = update.model_dump(exclude_unset=True)
     part_data.update(update_data)
     part_data["is_low_stock"] = part_data["quantity"] <= part_data["min_level"]
-    
+    await manager.broadcast_to_company(current_user.company_id, {"event": "part_updated", "data": part_data})
     return PartResponse(**part_data)
 
 
@@ -1427,6 +3309,7 @@ async def adjust_stock(part_id: str, quantity: int, reason: str, current_user: U
     _parts[part_id]["quantity"] += quantity
     _parts[part_id]["is_low_stock"] = _parts[part_id]["quantity"] <= _parts[part_id]["min_level"]
     
+    await manager.broadcast_to_company(current_user.company_id, {"event": "part_updated", "data": _parts[part_id]})
     return PartResponse(**_parts[part_id])
 
 
@@ -1450,6 +3333,8 @@ async def delete_part(part_id: str, current_user: UserResponse = Depends(get_cur
     if part.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Part not found")
     del _parts[part_id]
+    await manager.broadcast_to_company(current_user.company_id, {"event": "part_deleted", "data": {"id": part_id}})
+    return
 
 
 # =============================================================================
@@ -1462,6 +3347,7 @@ async def list_invoices(
     limit: int = Query(50, ge=1, le=100),
     type: Optional[str] = None,
     status: Optional[InvoiceStatus] = None,
+    search: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
 ):
     """List all invoices/quotes for the user's company."""
@@ -1471,6 +3357,23 @@ async def list_invoices(
         invoices = [i for i in invoices if i.get("type") == type]
     if status:
         invoices = [i for i in invoices if i.get("status") == status]
+    if search:
+        q = search.strip().lower()
+        def _val(v: Any) -> str:
+            return str(v or "").lower()
+        def _matches(inv: dict) -> bool:
+            cust = _customers.get(inv.get("customer_id") or "") or {}
+            return q in " ".join([
+                _val(inv.get("id")),
+                _val(inv.get("number")),
+                _val(inv.get("type")),
+                _val(inv.get("status")),
+                _val(inv.get("job_id")),
+                _val(cust.get("name")),
+                _val(cust.get("email")),
+                _val(cust.get("phone")),
+            ])
+        invoices = [i for i in invoices if _matches(i)]
     return [InvoiceResponse(**i) for i in invoices[skip:skip+limit]]
 
 
@@ -1530,7 +3433,64 @@ async def create_invoice(invoice: InvoiceCreate, current_user: UserResponse = De
         except Exception as e:
             logger.warning(f"Failed to queue invoice created message: {e}")
     
+    await manager.broadcast_to_company(current_user.company_id, {"event": "invoice_created", "data": invoice_data})
     return InvoiceResponse(**invoice_data)
+
+
+@app.post("/api/invoices/batch", response_model=List[InvoiceResponse], tags=["Invoices"])
+async def create_invoices_batch(batch: BatchInvoiceRequest, current_user: UserResponse = Depends(get_current_user)):
+    """Process a batch of invoices for performance testing."""
+    results = []
+    for invoice in batch.invoices:
+        invoice_id = str(uuid.uuid4())
+        prefix = "INV" if invoice.type == "Invoice" else "QT"
+        number = f"{prefix}-{invoice_id[:8].upper()}"
+        
+        subtotal = sum(item.unit_price * item.quantity for item in invoice.items)
+        tax_amount = subtotal * 0.15
+        total = subtotal + tax_amount
+        
+        invoice_data = {
+            "id": invoice_id,
+            **invoice.model_dump(),
+            "company_id": current_user.company_id,
+            "number": number,
+            "issue_date": datetime.now(),
+            "due_date": datetime.now() + timedelta(days=30),
+            "subtotal": subtotal,
+            "tax_amount": tax_amount,
+            "total": total,
+            "status": InvoiceStatus.DRAFT,
+        }
+        _invoices[invoice_id] = invoice_data
+        results.append(InvoiceResponse(**invoice_data))
+    return results
+
+
+@app.get("/api/reports/pdf", tags=["Analytics"])
+async def generate_pdf_report(current_user: UserResponse = Depends(get_current_user)):
+    """Generate a large PDF report for performance testing."""
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    
+    # Generate 50 pages of content
+    for i in range(1, 51):
+        p.drawString(100, height - 100, f"Workshop Management System - Performance Report Page {i}")
+        p.drawString(100, height - 130, f"Generated for: {current_user.name} ({current_user.company_id})")
+        p.drawString(100, height - 150, f"Timestamp: {datetime.now().isoformat()}")
+        
+        # Add some dummy data lines
+        y = height - 200
+        for j in range(40):
+            p.drawString(100, y, f"Data Record {j}: High-performance analytics simulation data line content...")
+            y -= 15
+            
+        p.showPage()
+        
+    p.save()
+    buffer.seek(0)
+    return Response(content=buffer.getvalue(), media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=report.pdf"})
 
 
 @app.get("/api/invoices/{invoice_id}", response_model=InvoiceResponse, tags=["Invoices"])
@@ -1545,12 +3505,13 @@ async def get_invoice(invoice_id: str, current_user: UserResponse = Depends(get_
 @app.patch("/api/invoices/{invoice_id}/status", response_model=InvoiceResponse, tags=["Invoices"])
 async def update_invoice_status(invoice_id: str, status: InvoiceStatus, current_user: UserResponse = Depends(get_current_user)):
     """Update invoice status if it belongs to the user's company."""
-    inv = _invoices.get(invoice_id)
-    if not inv or inv.get("company_id") != current_user.company_id:
+    invoice = _invoices.get(invoice_id)
+    if not invoice or invoice.get("company_id") != current_user.company_id:
         raise HTTPException(status_code=404, detail="Invoice not found")
     
-    inv["status"] = status
-    return InvoiceResponse(**inv)
+    invoice["status"] = status
+    await manager.broadcast_to_company(current_user.company_id, {"event": "invoice_updated", "data": invoice})
+    return InvoiceResponse(**invoice)
 
 
 @app.get("/api/invoices/{invoice_id}/items", response_model=List[InvoiceItem], tags=["Invoices"])
@@ -1762,71 +3723,57 @@ async def delete_invoice_item(invoice_id: str, item_id: str, current_user: UserR
 
 @app.get("/api/appointments", response_model=List[AppointmentResponse], tags=["Appointments"])
 async def list_appointments(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-    status: Optional[str] = None,
-    current_user: UserResponse = Depends(get_current_user),
+    search: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user)
 ):
-    """List all appointments for the user's company with optional filtering."""
     company_id = current_user.company_id
-    if company_id not in _appointments:
-        return []
-    
-    appointments = [a for a in _appointments[company_id].values()]
-    
-    if status:
-        appointments = [a for a in appointments if a.get("status") == status]
-    
-    return [AppointmentResponse(**a) for a in appointments[skip:skip+limit]]
+    company_appts = _appointments.get(company_id, {})
+    appts = list(company_appts.values())
+    if search:
+        q = search.strip().lower()
+        def _val(v: Any) -> str:
+            return str(v or "").lower()
+        def _matches(a: dict) -> bool:
+            cust = _customers.get(a.get("customer_id") or "") or {}
+            veh = _vehicles.get(a.get("vehicle_id") or "") or {}
+            return q in " ".join([
+                _val(a.get("title")),
+                _val(a.get("type")),
+                _val(a.get("status")),
+                _val(cust.get("name")),
+                _val(veh.get("registration")),
+                _val(veh.get("vin")),
+            ])
+        appts = [a for a in appts if _matches(a)]
+    return [AppointmentResponse(**a) for a in appts]
 
 
 @app.post("/api/appointments", response_model=AppointmentResponse, status_code=201, tags=["Appointments"])
-async def create_appointment(appointment: AppointmentCreate, current_user: UserResponse = Depends(get_current_user)):
-    """Create a new appointment for the user's company."""
-    appointment_id = str(uuid.uuid4())
+async def create_appointment(
+    appointment: AppointmentCreate,
+    current_user: UserResponse = Depends(get_current_user)
+):
     company_id = current_user.company_id
-    appointment_data = {
-        "id": appointment_id,
-        "company_id": company_id,
-        **appointment.model_dump(),
-    }
-    
     if company_id not in _appointments:
         _appointments[company_id] = {}
-    
-    _appointments[company_id][appointment_id] = appointment_data
-    
-    # Send "appointment confirmation" notification asynchronously
-    try:
-        cust = _customers.get(appointment.customer_id, {})
-        company = _companies.get(company_id, {})
-        workshop_name = company.get('name', 'Workshop')
         
-        # Format appointment details
-        start_time = appointment.start_time
-        if isinstance(start_time, str):
-            start_time = datetime.fromisoformat(start_time)
-        
-        variables = {
-            'customerName': cust.get('name', 'Customer'),
-            'appointmentType': appointment.appointment_type or 'Service',
-            'appointmentDate': start_time.strftime('%Y-%m-%d'),
-            'appointmentTime': start_time.strftime('%H:%M'),
-            'workshopName': workshop_name,
-        }
-        
-        asyncio.create_task(send_appointment_message(
-            appointment_id=appointment_id,
-            template_id='appointment_confirmation',
-            trigger_event='appointment_created',
-            variables=variables,
-            company_id=company_id,
-            customer_id=appointment.customer_id,
-        ))
-    except Exception as e:
-        logger.warning(f"Failed to queue appointment confirmation message: {e}")
+    appt_id = str(uuid.uuid4())
+    now = datetime.utcnow()
     
-    return AppointmentResponse(**appointment_data)
+    # Base data from appointment model
+    appt_data = appointment.model_dump()
+    
+    # Add/Override required response fields
+    appt_data.update({
+        "id": appt_id,
+        "company_id": company_id,
+        "created_at": now,
+        "updated_at": now,
+        "reminder_sent": False
+    })
+    
+    _appointments[company_id][appt_id] = appt_data
+    return appt_data
 
 
 @app.get("/api/appointments/{appointment_id}", response_model=AppointmentResponse, tags=["Appointments"])
@@ -1836,21 +3783,28 @@ async def get_appointment(appointment_id: str, current_user: UserResponse = Depe
     if company_id not in _appointments or appointment_id not in _appointments[company_id]:
         raise HTTPException(status_code=404, detail="Appointment not found")
     
-    return AppointmentResponse(**_appointments[company_id][appointment_id])
+    return _appointments[company_id][appointment_id]
 
 
 @app.patch("/api/appointments/{appointment_id}", response_model=AppointmentResponse, tags=["Appointments"])
-async def update_appointment(appointment_id: str, update: AppointmentUpdate, current_user: UserResponse = Depends(get_current_user)):
-    """Update an appointment if it belongs to the user's company."""
+async def update_appointment(
+    appointment_id: str,
+    update: AppointmentUpdate,
+    current_user: UserResponse = Depends(get_current_user)
+):
     company_id = current_user.company_id
-    if company_id not in _appointments or appointment_id not in _appointments[company_id]:
+    company_appts = _appointments.get(company_id, {})
+    if appointment_id not in company_appts:
         raise HTTPException(status_code=404, detail="Appointment not found")
+        
+    appt = company_appts[appointment_id]
     
-    appointment_data = _appointments[company_id][appointment_id]
+    # Update with new data
     update_data = update.model_dump(exclude_unset=True)
-    appointment_data.update(update_data)
+    appt.update(update_data)
+    appt["updated_at"] = datetime.utcnow()
     
-    return AppointmentResponse(**appointment_data)
+    return appt
 
 
 @app.delete("/api/appointments/{appointment_id}", status_code=204, tags=["Appointments"])
@@ -1870,35 +3824,35 @@ async def delete_appointment(appointment_id: str, current_user: UserResponse = D
 
 @app.get("/api/warranties", response_model=List[WarrantyResponse], tags=["Warranties"])
 async def list_warranties(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user)
 ):
-    """List all warranties for the user's company."""
     company_id = current_user.company_id
-    if company_id not in _warranties:
-        return []
-    
-    warranties = [w for w in _warranties[company_id].values()]
-    return [WarrantyResponse(**w) for w in warranties[skip:skip+limit]]
+    company_warrs = _warranties.get(company_id, {})
+    return [WarrantyResponse(**w) for w in company_warrs.values()]
 
 
 @app.post("/api/warranties", response_model=WarrantyResponse, status_code=201, tags=["Warranties"])
-async def create_warranty(warranty: WarrantyCreate, current_user: UserResponse = Depends(get_current_user)):
-    """Create a new warranty for the user's company."""
-    warranty_id = str(uuid.uuid4())
+async def create_warranty(
+    warranty: WarrantyCreate,
+    current_user: UserResponse = Depends(get_current_user)
+):
     company_id = current_user.company_id
-    warranty_data = {
-        "id": warranty_id,
-        "company_id": company_id,
-        **warranty.model_dump(),
-    }
-    
     if company_id not in _warranties:
         _warranties[company_id] = {}
+        
+    warranty_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    
+    warranty_data = warranty.model_dump()
+    warranty_data.update({
+        "id": warranty_id,
+        "company_id": company_id,
+        "created_at": now,
+        "updated_at": now
+    })
     
     _warranties[company_id][warranty_id] = warranty_data
-    return WarrantyResponse(**warranty_data)
+    return warranty_data
 
 
 @app.get("/api/warranties/{warranty_id}", response_model=WarrantyResponse, tags=["Warranties"])
@@ -1908,7 +3862,7 @@ async def get_warranty(warranty_id: str, current_user: UserResponse = Depends(ge
     if company_id not in _warranties or warranty_id not in _warranties[company_id]:
         raise HTTPException(status_code=404, detail="Warranty not found")
     
-    return WarrantyResponse(**_warranties[company_id][warranty_id])
+    return _warranties[company_id][warranty_id]
 
 
 @app.patch("/api/warranties/{warranty_id}", response_model=WarrantyResponse, tags=["Warranties"])
@@ -1921,8 +3875,9 @@ async def update_warranty(warranty_id: str, update: WarrantyUpdate, current_user
     warranty_data = _warranties[company_id][warranty_id]
     update_data = update.model_dump(exclude_unset=True)
     warranty_data.update(update_data)
+    warranty_data["updated_at"] = datetime.utcnow()
     
-    return WarrantyResponse(**warranty_data)
+    return warranty_data
 
 
 @app.delete("/api/warranties/{warranty_id}", status_code=204, tags=["Warranties"])
@@ -2031,37 +3986,33 @@ async def list_job_labor(job_id: str, current_user: UserResponse = Depends(get_c
     return [LaborEntryResponse(**le) for le in labor_entries]
 
 
-@app.post("/api/jobs/{job_id}/labor", response_model=LaborEntryResponse, status_code=201, tags=["Labor"])
-async def create_labor_entry(
+@app.post("/api/jobs/{job_id}/labor", response_model=LaborEntryResponse, status_code=201, tags=["Jobs"])
+async def add_labor_log(
     job_id: str,
     labor: LaborEntryCreate,
-    current_user: UserResponse = Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user)
 ):
-    """Create a new labor entry for a job."""
     company_id = current_user.company_id
-    
-    # Verify job exists and belongs to company
-    if job_id not in _jobs or _jobs[job_id].get("company_id") != company_id:
+    if job_id not in _jobs or _jobs[job_id]["company_id"] != company_id:
         raise HTTPException(status_code=404, detail="Job not found")
-    
-    # Verify labor entry is for the same job
-    if labor.job_id != job_id:
-        raise HTTPException(status_code=400, detail="Labor entry job_id must match URL job_id")
-    
-    labor_id = str(uuid.uuid4())
-    labor_data = {
-        "id": labor_id,
-        "company_id": company_id,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
-        **labor.model_dump(),
-    }
-    
+        
     if company_id not in _labor_entries:
         _labor_entries[company_id] = {}
+        
+    labor_id = str(uuid.uuid4())
+    now = datetime.utcnow()
+    
+    labor_data = labor.model_dump()
+    labor_data.update({
+        "id": labor_id,
+        "company_id": company_id,
+        "created_at": now,
+        "updated_at": now,
+        "total": labor.hours * labor.rate_per_hour
+    })
     
     _labor_entries[company_id][labor_id] = labor_data
-    return LaborEntryResponse(**labor_data)
+    return labor_data
 
 
 @app.patch("/api/jobs/{job_id}/labor/{labor_id}", response_model=LaborEntryResponse, tags=["Labor"])
@@ -3195,6 +5146,9 @@ async def invite_user(
         raise HTTPException(status_code=403, detail="Only admins can invite users")
     
     try:
+        # Enforce subscription user limit (counts pending invites)
+        _enforce_user_limit_for_invite(current_user.company_id, db=db)
+
         # Create invitation via async session
         from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
         from sqlalchemy import select
@@ -3375,6 +5329,12 @@ async def accept_invitation(
                 success=False,
                 message="Email already registered"
             )
+
+        # Enforce subscription user limit (user creation)
+        try:
+            _enforce_user_limit_for_create(invitation.company_id, db=db)
+        except HTTPException as e:
+            return AcceptInvitationResponse(success=False, message=str(e.detail))
         
         # Hash password
         password_hash = hash_password(data.password)
@@ -3502,6 +5462,32 @@ app.include_router(voice_router, prefix="/api")
 # =============================================================================
 # Run Server
 # =============================================================================
+
+# WebSocket endpoint for notifications
+@app.websocket("/api/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await manager.connect(websocket, user_id)
+    try:
+        while True:
+            # Keep connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, user_id)
+
+
+# Helper to trigger in-app notifications
+async def trigger_notification(user_id: str, title: str, message: str, type: str = "info", link: Optional[str] = None):
+    notification_data = {
+        "type": "notification",
+        "payload": {
+            "title": title,
+            "message": message,
+            "type": type,
+            "link": link
+        }
+    }
+    await manager.send_personal_message(notification_data, user_id)
+
 
 if __name__ == "__main__":
     import uvicorn

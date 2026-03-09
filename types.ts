@@ -1,4 +1,3 @@
-// EV Battery and Health Log Types
 export interface EvBattery {
   id: string;
   vehicleId: string;
@@ -13,6 +12,22 @@ export interface EvBattery {
   needsAttention: boolean;
   cells: Array<{ cell: string; voltage: number }>;
   createdAt: string;
+}
+
+export interface EvBatteryTelemetry {
+  current_soh: number;
+  cycle_count: number;
+  avg_temperature: number;
+  fast_charge_ratio: number;
+  age_months: number;
+  avg_dod: number;
+  capacity_kwh: number;
+  ambient_temp_avg: number;
+}
+
+export interface BatteryHealthResponse {
+  current: EvBattery | null;
+  history: EvBattery[];
 }
 
 export interface BatteryHealthLog {
@@ -213,7 +228,11 @@ export interface Job {
   estimatedCost: number;
   createdAt: string;
   dueDate: string;
+  startedAt?: string;
   completedAt?: string;  // actual completion timestamp
+  estimatedHours: number;
+  actualHours: number;
+  timeVariance: number;
   
   // Enhanced Arrays
   tasks: JobTask[];
@@ -245,6 +264,7 @@ export interface DiagnosticRecord {
   symptoms: string;
   dtcCodes: string[];
   aiAnalysis: string;
+  batteryTelemetry?: EvBatteryTelemetry;
 }
 
 export interface Appointment {
@@ -334,4 +354,82 @@ export interface CompanyProfile {
   quotePrefix: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface InAppNotification {
+  id: string;
+  userId: string;
+  companyId: string;
+  title: string;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+  link?: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface NotificationPreferences {
+  userId: string;
+  email: boolean;
+  inApp: boolean;
+  events: {
+    jobUpdates: boolean;
+    inventoryAlerts: boolean;
+    customerMessages: boolean;
+    systemAlerts: boolean;
+  };
+}
+
+export interface UserPreferences {
+  defaultView: 'list' | 'grid';
+  dateFormat: 'short' | 'medium' | 'long' | 'iso';
+  currency: string;
+  currencySymbol: string;
+  columnVisibility: Record<string, string[]>;
+  emailFrequency: 'daily' | 'weekly' | 'instant' | 'none';
+}
+
+// --- Analytics Types ---
+export interface TechnicianPerformance {
+  technicianId: string;
+  technicianName: string;
+  jobsCompleted: number;
+  avgTimePerJob: number;
+  revenueGenerated: number;
+  utilizationRate: number;
+  qualityScore: number;
+  warrantyClaims: number;
+}
+
+export interface TechnicianJobAnalytics {
+  jobId: string;
+  jobNumber: string;
+  serviceType: string;
+  status: string;
+  hoursLogged: number;
+  revenue: number;
+  completedAt?: string;
+}
+
+export interface TechnicianRevenueAnalytics {
+  technicianId: string;
+  totalRevenue: number;
+  laborRevenue: number;
+  partsRevenue: number;
+  period: string;
+}
+
+export interface TimeAccuracyMetric {
+  serviceType: string;
+  avgEstimatedHours: number;
+  avgActualHours: number;
+  avgVariance: number;
+  accuracyPercentage: number;
+  jobCount: number;
+}
+
+export interface TimeTrackingAnalytics {
+  overallAccuracy: number;
+  metricsByService: TimeAccuracyMetric[];
+  topBottlenecks: any[];
 }

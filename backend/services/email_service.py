@@ -235,6 +235,20 @@ class EmailService:
         except Exception as e:
             logger.error(f"Failed to send email via server: {e}")
             return False
+    
+    async def send_email(self, to_email: str, subject: str, html_content: str) -> bool:
+        """
+        Public method to send emails. Wrapper around _send_email.
+        
+        Args:
+            to_email: Recipient email address
+            subject: Email subject
+            html_content: HTML email content
+        
+        Returns:
+            True if email sent successfully, False otherwise
+        """
+        return await self._send_email(to_email, subject, html_content)
 
 
 # Create singleton instance

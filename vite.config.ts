@@ -9,6 +9,13 @@ export default defineConfig(({ mode }) => {
         port: 3000,
         strictPort: true,
         host: '0.0.0.0',
+        proxy: {
+          '/api': {
+            target: 'http://localhost:8000',
+            changeOrigin: true,
+            rewrite: (path) => path,
+          },
+        },
       },
       plugins: [react()],
       define: {

@@ -34,11 +34,7 @@ export class InvoicePaymentService {
    */
   static async getPaymentHistory(invoiceId: string): Promise<PaymentTransaction[]> {
     try {
-      const response = await ApiCall.get(`/api/payment/history/${invoiceId}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch payment history: ${response.statusText}`);
-      }
-      const data = await response.json();
+      const data = await ApiCall.get<PaymentTransaction[]>(`/api/payment/history/${invoiceId}`);
       return Array.isArray(data) ? data : [];
     } catch (error) {
       console.error('Error fetching payment history:', error);
@@ -55,17 +51,12 @@ export class InvoicePaymentService {
     reason?: string
   ): Promise<{ success: boolean; message: string }> {
     try {
-      const response = await ApiCall.post('/api/payment/refund', {
+      const data = await ApiCall.post<{ message: string }>('/api/payment/refund', {
         payment_id: paymentId,
         amount,
         reason,
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to refund payment: ${response.statusText}`);
-      }
-
-      const data = await response.json();
       return {
         success: true,
         message: data.message || 'Payment refunded successfully',
@@ -89,16 +80,11 @@ export class InvoicePaymentService {
     message?: string;
   }> {
     try {
-      const response = await ApiCall.post(
+      const data = await ApiCall.post<{ email_sent: boolean; sms_sent: boolean }>(
         `/api/invoices/${invoiceId}/reminder`,
         {}
       );
 
-      if (!response.ok) {
-        throw new Error(`Failed to send reminder: ${response.statusText}`);
-      }
-
-      const data = await response.json();
       return {
         success: true,
         email_sent: data.email_sent || false,

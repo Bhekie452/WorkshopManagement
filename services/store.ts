@@ -2,7 +2,10 @@
 import { 
   User, UserRole, Job, Customer, Vehicle, JobStatus, Priority, Part, 
   DiagnosticRecord, Appointment, Invoice, JobLog, JobNotification,
-  Warranty, MileageRecord, Attachment 
+  Warranty, MileageRecord, Attachment, InAppNotification, NotificationPreferences,
+  BatteryHealthResponse, EvBatteryTelemetry, EvBattery,
+  TechnicianPerformance, TechnicianJobAnalytics, TechnicianRevenueAnalytics,
+  TimeAccuracyMetric, TimeTrackingAnalytics
 } from '../types';
 import { FirestoreService, Collections } from './firestore';
 
@@ -40,28 +43,32 @@ const MOCK_JOBS: Job[] = [
     tasks: [{id: 't1', description: 'Drain Oil', completed: true}, {id: 't2', description: 'Replace Filter', completed: false}],
     partsUsed: [], laborLog: [], activityLog: [
       { id: 'l1', date: new Date(Date.now() - 86400000 * 2).toISOString(), user: 'Admin', action: 'Created', details: 'Job card created' }
-    ], notifications: [], warranties: [], attachments: []
+    ], notifications: [], warranties: [], attachments: [],
+    estimatedHours: 2, actualHours: 0, timeVariance: 0
   },
   { 
     id: 'JOB-9921', customerId: 'c2', vehicleId: 'v2', status: JobStatus.PENDING, priority: Priority.HIGH, 
     serviceType: 'Diagnostics', description: 'Battery efficiency check', notes: '',
     estimatedCost: 1500, createdAt: new Date().toISOString(), dueDate: new Date(Date.now() + 86400000 * 3).toISOString(),
     tasks: [{id: 't3', description: 'Run OBD Diagnostics', completed: false}],
-    partsUsed: [], laborLog: [], activityLog: [], notifications: [], warranties: [], attachments: []
+    partsUsed: [], laborLog: [], activityLog: [], notifications: [], warranties: [], attachments: [],
+    estimatedHours: 1.5, actualHours: 0, timeVariance: 0
   },
   { 
     id: 'JOB-1023', customerId: 'c1', vehicleId: 'v1', status: JobStatus.COMPLETED, priority: Priority.LOW, 
     serviceType: 'Tire Rotation', description: 'Rotate all 4 tires', notes: 'Check tread depth',
     estimatedCost: 800, createdAt: new Date(Date.now() - 86400000 * 10).toISOString(), dueDate: new Date(Date.now() - 86400000 * 9).toISOString(),
     tasks: [{id: 't4', description: 'Rotate Tires', completed: true}],
-    partsUsed: [], laborLog: [], activityLog: [], notifications: [], warranties: [], attachments: []
+    partsUsed: [], laborLog: [], activityLog: [], notifications: [], warranties: [], attachments: [],
+    estimatedHours: 1, actualHours: 1.2, timeVariance: 0.2
   },
   { 
     id: 'JOB-5542', customerId: 'c3', vehicleId: 'v3', status: JobStatus.PAID, priority: Priority.MEDIUM, 
     serviceType: 'Software Update', description: 'System firmware update', notes: '',
     estimatedCost: 1200, createdAt: new Date(Date.now() - 86400000 * 5).toISOString(), dueDate: new Date(Date.now() - 86400000 * 4).toISOString(),
     tasks: [{id: 't5', description: 'Flash Firmware', completed: true}],
-    partsUsed: [], laborLog: [], activityLog: [], notifications: [], warranties: [], attachments: []
+    partsUsed: [], laborLog: [], activityLog: [], notifications: [], warranties: [], attachments: [],
+    estimatedHours: 0.5, actualHours: 0.4, timeVariance: -0.1
   },
 ];
 
@@ -111,7 +118,7 @@ const get = <T>(key: string, initial: T): T => {
 
 // Helper to access cached companies; used for signup dropdown
 const getCompanies = (): {id:string;name:string}[] => {
-  return get<{id:string;name:string}>('companies', MOCK_COMPANIES);
+  return get('companies', MOCK_COMPANIES);
 };
 
 // Filter array of items based on current user's companyId (if present)
@@ -201,7 +208,7 @@ export const store = {
   isInitialized: () => _initialized,
 
   // ==================== COMPANIES ====================
-  getCompanies: () => get<{id:string;name:string}>('companies', MOCK_COMPANIES),
+  getCompanies: () => get('companies', MOCK_COMPANIES),
 
   // ==================== USERS ====================
   getUsers: () => MOCK_USERS,
@@ -437,12 +444,26 @@ export const store = {
     }
   },
 
+  deleteJobAttachment: (jobId: string, attachmentId: string) => {
+    const list = get<Job[]>('jobs', MOCK_JOBS);
+    const jobIndex = list.findIndex(j => j.id === jobId);
+    if (jobIndex > -1) {
+      const job = list[jobIndex];
+      job.attachments = (job.attachments || []).filter(a => a.id !== attachmentId);
+      list[jobIndex] = job;
+      set('jobs', list);
+      firestoreUpdate(Collections.JOBS, jobId, { attachments: job.attachments });
+    }
+  },
+
   // ==================== PARTS/INVENTORY ====================
-  getParts: () => get<Part[]>('parts', MOCK_PARTS),
+  getParts: () => filterByCompany(get<Part[]>('parts', MOCK_PARTS)),
   
   addPart: (p: Part) => {
     const list = get<Part[]>('parts', MOCK_PARTS);
-    const newItem = { ...p, id: `PART-${Math.floor(Math.random() * 10000)}` };
+    const userStr = localStorage.getItem('currentUser');
+    const companyId = userStr ? JSON.parse(userStr).companyId : undefined;
+    const newItem = { ...p, id: `PART-${Math.floor(Math.random() * 10000)}`, companyId: p.companyId || companyId };
     set('parts', [...list, newItem]);
     firestoreSave(Collections.PARTS, newItem.id, newItem);
     return newItem;
@@ -476,6 +497,75 @@ export const store = {
     const list = get<DiagnosticRecord[]>('diagnostics', MOCK_DIAGNOSTICS);
     set('diagnostics', list.filter(d => d.id !== id));
     firestoreDelete(Collections.DIAGNOSTICS, id);
+  },
+
+  // ==================== EV BATTERY ANALYSIS ====================
+  getBatteryHealth: async (vehicleId: string): Promise<BatteryHealthResponse> => {
+    try {
+      const resp = await fetch(`/api/vehicles/${vehicleId}/battery-health`);
+      if (!resp.ok) throw new Error('Failed to fetch battery health');
+      const data = await resp.json();
+      
+      // Map backend RULPrediction to frontend EvBattery type if needed
+      const mapRULToEvBattery = (h: any): EvBattery => ({
+        id: h.id || Math.random().toString(36).substr(2, 9),
+        vehicleId: vehicleId,
+        soh: h.current_soh,
+        soc: 100, // placeholder
+        estimatedRangeKm: h.rul_cycles * 5, // rough estimate
+        status: h.health_status as any,
+        rulMonths: h.rul_months,
+        confidence: h.confidence,
+        nextMaintenanceDate: new Date(Date.now() + h.rul_months * 30 * 24 * 60 * 60 * 1000).toISOString(),
+        maintenanceReason: h.recommendations?.[0] || 'Routine maintenance',
+        needsAttention: h.health_status === 'Critical' || h.health_status === 'Degraded',
+        cells: [],
+        createdAt: h.recorded_at || new Date().toISOString()
+      });
+
+      return {
+        current: data.current ? mapRULToEvBattery(data.current) : null,
+        history: (data.history || []).map(mapRULToEvBattery)
+      };
+    } catch (err) {
+      console.error('Error fetching battery health:', err);
+      return { current: null, history: [] };
+    }
+  },
+
+  addDiagnosticWithRUL: async (d: Omit<DiagnosticRecord, 'id'>, telemetry?: EvBatteryTelemetry) => {
+    try {
+      const resp = await fetch('/api/diagnostics', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vehicle_id: d.vehicleId,
+          symptoms: d.symptoms,
+          dtc_codes: d.dtcCodes,
+          battery_telemetry: telemetry
+        })
+      });
+      if (!resp.ok) throw new Error('Failed to save diagnostic and trigger RUL');
+      const saved = await resp.json();
+      
+      const newItem: DiagnosticRecord = {
+        ...d,
+        id: saved.id,
+        date: saved.recorded_at || d.date,
+        aiAnalysis: saved.ai_analysis || d.aiAnalysis,
+        batteryTelemetry: telemetry
+      };
+      
+      const list = get<DiagnosticRecord[]>('diagnostics', MOCK_DIAGNOSTICS);
+      set('diagnostics', [newItem, ...list]);
+      firestoreSave(Collections.DIAGNOSTICS, newItem.id, newItem);
+      
+      return newItem;
+    } catch (err) {
+      console.error('Error adding diagnostic with RUL:', err);
+      // Fallback
+      return store.addDiagnostic({ ...d, id: '' });
+    }
   },
 
   // ==================== APPOINTMENTS ====================
@@ -575,6 +665,122 @@ export const store = {
   reset: () => {
     localStorage.clear();
     window.location.reload();
+  },
+
+  // ==================== NOTIFICATIONS ====================
+  getNotifications: () => {
+    const notifications = get<InAppNotification[]>('notifications', []);
+    const user = store.getCurrentUser();
+    return notifications.filter(n => n.userId === user?.id);
+  },
+
+  addNotification: (n: Partial<InAppNotification>) => {
+    const list = get<InAppNotification[]>('notifications', []);
+    const user = store.getCurrentUser();
+    const newItem: InAppNotification = {
+      id: Math.random().toString(36).substr(2, 9),
+      userId: user?.id || '',
+      companyId: user?.companyId || '',
+      title: n.title || 'Notification',
+      message: n.message || '',
+      type: n.type || 'info', // 'success' | 'warning' | 'error' | 'info'
+      link: n.link,
+      isRead: false,
+      createdAt: new Date().toISOString(),
+      ...n
+    };
+    set('notifications', [newItem, ...list]);
+    firestoreSave(Collections.NOTIFICATIONS, newItem.id, newItem);
+    
+    // Dispatch custom event to trigger Toasts/Sound globally
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('app-notification', { detail: newItem }));
+    }
+    
+    return newItem;
+  },
+
+  markNotificationAsRead: (id: string) => {
+    const list = get<InAppNotification[]>('notifications', []);
+    const index = list.findIndex(n => n.id === id);
+    if (index > -1) {
+      list[index].isRead = true;
+      set('notifications', list);
+      firestoreUpdate(Collections.NOTIFICATIONS, id, { isRead: true });
+    }
+  },
+
+  getNotificationPreferences: (): NotificationPreferences => {
+    const user = store.getCurrentUser();
+    const initialPrefs: NotificationPreferences = {
+      userId: user?.id || '',
+      email: true,
+      inApp: true,
+      events: {
+        jobUpdates: true,
+        inventoryAlerts: true,
+        customerMessages: true,
+        systemAlerts: true
+      }
+    };
+    return get<NotificationPreferences>(`prefs_${user?.id}`, initialPrefs);
+  },
+
+  // ==================== ANALYTICS ====================
+  getTechnicianPerformance: async (): Promise<TechnicianPerformance[]> => {
+    try {
+      const resp = await fetch('/api/analytics/technician-performance');
+      if (!resp.ok) throw new Error('Failed to fetch technician performance');
+      return await resp.json();
+    } catch (err) {
+      console.error(err);
+      return [];
+    }
+  },
+
+  getTechnicianJobsAnalytics: async (userId: string): Promise<TechnicianJobAnalytics[]> => {
+    try {
+      const resp = await fetch(`/api/analytics/technician/${userId}/jobs`);
+      if (!resp.ok) throw new Error('Failed to fetch technician jobs analytics');
+      return await resp.json();
+    } catch (err) {
+      console.error(err);
+      return [];
+    }
+  },
+
+  getTechnicianRevenueAnalytics: async (userId: string): Promise<TechnicianRevenueAnalytics> => {
+    try {
+      const resp = await fetch(`/api/analytics/technician/${userId}/revenue`);
+      if (!resp.ok) throw new Error('Failed to fetch technician revenue analytics');
+      return await resp.json();
+    } catch (err) {
+      console.error(err);
+      return { technicianId: userId, totalRevenue: 0, laborRevenue: 0, partsRevenue: 0, period: 'Monthly' };
+    }
+  },
+
+  getTimeAccuracyAnalytics: async (): Promise<TimeTrackingAnalytics> => {
+    try {
+      const resp = await fetch('/api/analytics/time-accuracy');
+      if (!resp.ok) throw new Error('Failed to fetch time accuracy analytics');
+      return await resp.json();
+    } catch (err) {
+      console.error(err);
+      return {
+        overallAccuracy: 0,
+        metricsByService: [],
+        topBottlenecks: []
+      };
+    }
+  },
+
+  updateNotificationPreferences: (data: Partial<NotificationPreferences>) => {
+    const user = store.getCurrentUser();
+    const current = store.getNotificationPreferences();
+    const updated = { ...current, ...data };
+    set(`prefs_${user?.id}`, updated);
+    firestoreUpdate(Collections.NOTIFICATION_PREFERENCES, user?.id || '', updated);
   }
 };
 

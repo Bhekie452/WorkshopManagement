@@ -20,6 +20,9 @@ interface DataTableProps<T> {
   striped?: boolean;
   hoverable?: boolean;
   compact?: boolean;
+  selectable?: boolean;
+  selectedKeys?: string[];
+  onSelectionChange?: (keys: string[]) => void;
 }
 
 type SortDirection = 'asc' | 'desc' | null;
@@ -34,6 +37,9 @@ export function DataTable<T>({
   striped = true,
   hoverable = true,
   compact = false,
+  selectable = false,
+  selectedKeys = [],
+  onSelectionChange,
 }: DataTableProps<T>) {
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>(null);
@@ -71,6 +77,27 @@ export function DataTable<T>({
     });
   }, [data, sortKey, sortDirection]);
 
+  const handleSelectAll = (checked: boolean) => {
+    if (!onSelectionChange) return;
+    if (checked) {
+      onSelectionChange(sortedData.map(keyExtractor));
+    } else {
+      onSelectionChange([]);
+    }
+  };
+
+  const handleSelectRow = (key: string, checked: boolean) => {
+    if (!onSelectionChange) return;
+    if (checked) {
+      onSelectionChange([...selectedKeys, key]);
+    } else {
+      onSelectionChange(selectedKeys.filter(k => k !== key));
+    }
+  };
+
+  const isAllSelected = sortedData.length > 0 && selectedKeys.length === sortedData.length;
+  const isIndeterminate = selectedKeys.length > 0 && selectedKeys.length < sortedData.length;
+
   const SortIcon = ({ column }: { column: Column<T> }) => {
     if (!column.sortable) return null;
     if (sortKey !== String(column.key)) {
@@ -102,6 +129,17 @@ export function DataTable<T>({
       <table className="w-full">
         <thead>
           <tr className="bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+            {selectable && (
+              <th className={`w-12 text-center ${compact ? 'px-4 py-2' : 'px-6 py-3'}`}>
+                <input 
+                  type="checkbox" 
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                  checked={isAllSelected}
+                  ref={input => { if (input) input.indeterminate = isIndeterminate; }}
+                  onChange={(e) => handleSelectAll(e.target.checked)}
+                />
+              </th>
+            )}
             {columns.map((column) => (
               <th
                 key={String(column.key)}
@@ -139,18 +177,36 @@ export function DataTable<T>({
               </td>
             </tr>
           ) : (
-            sortedData.map((item, index) => (
+            sortedData.map((item, index) => {
+              const rowKey = keyExtractor(item);
+              const isSelected = selectedKeys.includes(rowKey);
+              return (
               <tr
-                key={keyExtractor(item)}
-                onClick={() => onRowClick?.(item)}
+                key={rowKey}
+                onClick={(e) => {
+                  // Prevent row click if clicking on checkbox or its cell
+                  if ((e.target as HTMLElement).tagName.toLowerCase() === 'input') return;
+                  if ((e.target as HTMLElement).closest('.selection-cell')) return;
+                  onRowClick?.(item);
+                }}
                 className={`
                   bg-white dark:bg-gray-900
-                  ${striped && index % 2 === 1 ? 'bg-gray-50 dark:bg-gray-800/50' : ''}
+                  ${isSelected ? 'bg-blue-50 dark:bg-blue-900/20' : striped && index % 2 === 1 ? 'bg-gray-50 dark:bg-gray-800/50' : ''}
                   ${hoverable ? 'hover:bg-gray-50 dark:hover:bg-gray-800' : ''}
                   ${onRowClick ? 'cursor-pointer' : ''}
                   transition-colors
                 `}
               >
+                {selectable && (
+                  <td className={`selection-cell text-center ${compact ? 'px-4 py-2' : 'px-6 py-4'}`} onClick={(e) => e.stopPropagation()}>
+                    <input 
+                      type="checkbox" 
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                      checked={isSelected}
+                      onChange={(e) => handleSelectRow(rowKey, e.target.checked)}
+                    />
+                  </td>
+                )}
                 {columns.map((column) => (
                   <td
                     key={String(column.key)}
@@ -164,7 +220,7 @@ export function DataTable<T>({
                   </td>
                 ))}
               </tr>
-            ))
+            )})
           )}
         </tbody>
       </table>

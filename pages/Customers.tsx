@@ -5,8 +5,13 @@ import { emailService } from '../services/emailService';
 import { Pagination, paginate } from '../components/Pagination';
 import { useAuth } from '../components/AuthContext';
 import { Permission } from '../services/rbac';
-import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2, Trash2, Filter, SlidersHorizontal } from 'lucide-react';
+import { Plus, Search, Mail, Phone, MapPin, ShieldCheck, Upload, FileText, X, Loader2, Trash2, Filter, SlidersHorizontal, CheckCircle2, Download, Link2 } from 'lucide-react';
 import { Customer, Attachment, ContactChannel } from '../types';
+import { AdvancedFilterPanel } from '../components/ui/AdvancedFilterPanel';
+import { BulkActionPanel } from '../components/ui/BulkActionPanel';
+import { ExportDataModal } from '../components/ui/ExportDataModal';
+import { ExportColumn } from '../utils/exportUtils';
+import { portalService } from '../services/portalService';
 
 export const Customers: React.FC = () => {
   const { can } = useAuth();
@@ -22,6 +27,32 @@ export const Customers: React.FC = () => {
   const [pageSize, setPageSize] = useState(10);
   const [filterType, setFilterType] = useState<string>('ALL');
   const [filterConsent, setFilterConsent] = useState<string>('ALL');
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [portalLinkLoading, setPortalLinkLoading] = useState<string | null>(null);
+
+  const handleCreatePortalLink = async (customer: Customer) => {
+    setPortalLinkLoading(customer.id);
+    try {
+      const jobs = store.getJobs().filter((j) => j.customerId === customer.id);
+      const invoices = store.getInvoices().filter((i) => i.customerId === customer.id);
+      const vehicles = store.getVehicles().filter((v) => v.ownerId === customer.id);
+      const appointments = store.getAppointments().filter((a) => a.customerId === customer.id);
+      const { url } = await portalService.createToken(customer.id, {
+        customer: { id: customer.id, name: customer.name, email: customer.email, phone: customer.phone, address: customer.address },
+        jobs: jobs as any,
+        invoices: invoices as any,
+        vehicles: vehicles as any,
+        appointments: appointments as any,
+      });
+      await navigator.clipboard.writeText(url);
+      alert(`Portal link copied to clipboard! Valid for 7 days.\n\n${url}`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to create portal link');
+    } finally {
+      setPortalLinkLoading(null);
+    }
+  };
 
   const loadData = async () => {
     setIsLoading(true);
@@ -127,6 +158,22 @@ export const Customers: React.FC = () => {
     }
   };
 
+  const handleBulkDelete = () => {
+    if (confirm(`Are you sure you want to delete ${selectedCustomerIds.length} customers?`)) {
+      setIsLoading(true);
+      Promise.all(selectedCustomerIds.map(id => store.deleteCustomer(id)))
+        .then(() => {
+          setSelectedCustomerIds([]);
+          loadData();
+        })
+        .catch(error => {
+          console.error('Failed to bulk delete', error);
+          alert('Failed to delete some customers.');
+          setIsLoading(false);
+        });
+    }
+  };
+
   const filteredCustomers = customers.filter(c => {
     const matchesSearch = !search || 
       c.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -145,6 +192,7 @@ export const Customers: React.FC = () => {
     setFilterType('ALL');
     setFilterConsent('ALL');
     setCurrentPage(1);
+    setSelectedCustomerIds([]);
   };
 
   if (isLoading && customers.length === 0) {
@@ -160,90 +208,105 @@ export const Customers: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Customer Management</h1>
-        <button
-          onClick={handleCreate}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-          disabled={!can(Permission.MANAGE_CUSTOMERS)}
-          title={!can(Permission.MANAGE_CUSTOMERS) ? 'You do not have permission' : ''}
-        >
-          <Plus size={18} /> Add Customer
-        </button>
-      </div>
+      <ExportDataModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        data={filteredCustomers}
+        availableColumns={[
+          { header: 'Customer ID', key: 'id' },
+          { header: 'Name', key: 'name' },
+          { header: 'Email', key: 'email' },
+          { header: 'Phone', key: 'phone' },
+          { header: 'Address', key: 'address' },
+          { header: 'Customer Type', key: 'type' },
+          { header: 'POPIA Consent', key: 'consent', format: (v) => v ? 'Yes' : 'No' }
+        ]}
+        filename="customers_export"
+      />
 
-      {/* Filter Bar */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-        <div className="flex flex-col lg:flex-row gap-4">
-          {/* Search */}
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <input
-              type="text"
-              placeholder="Search by name, email, or phone..."
-              className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-300 outline-none transition-all"
-              value={search}
-              onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
-            />
-          </div>
-          {/* Filter Controls */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5 text-sm text-gray-500 mr-1">
-              <SlidersHorizontal size={16} />
-              <span className="hidden sm:inline font-medium">Filters</span>
-              {activeFilterCount > 0 && (
-                <span className="bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeFilterCount}</span>
-              )}
-            </div>
-            {/* Type Filter */}
-            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
-              {['ALL', 'Private', 'Fleet', 'Government'].map(type => (
-                <button
-                  key={type}
-                  onClick={() => { setFilterType(type); setCurrentPage(1); }}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                    filterType === type
-                      ? 'bg-white text-blue-700 shadow-sm border border-blue-200'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {type === 'ALL' ? 'All Types' : type}
-                </button>
-              ))}
-            </div>
-            {/* Consent Filter */}
-            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
-              {['ALL', 'Yes', 'No'].map(val => (
-                <button
-                  key={val}
-                  onClick={() => { setFilterConsent(val); setCurrentPage(1); }}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                    filterConsent === val
-                      ? 'bg-white shadow-sm border ' + (val === 'Yes' ? 'text-green-700 border-green-200' : val === 'No' ? 'text-red-700 border-red-200' : 'text-blue-700 border-blue-200')
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {val === 'ALL' ? 'Consent' : val === 'Yes' ? '✓ Consented' : '✗ Pending'}
-                </button>
-              ))}
-            </div>
-            {/* Clear Filters */}
-            {activeFilterCount > 0 && (
-              <button
-                onClick={clearFilters}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-              >
-                <X size={14} /> Clear
-              </button>
-            )}
-          </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Customer Management</h1>
+          <p className="text-sm text-gray-500">Manage clients, communication preferences, and details.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsExportModalOpen(true)}
+            className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
+          >
+            <Download size={20} /> Export
+          </button>
+          <button
+            onClick={handleCreate}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={!can(Permission.MANAGE_CUSTOMERS)}
+            title={!can(Permission.MANAGE_CUSTOMERS) ? 'You do not have permission' : ''}
+          >
+            <Plus size={18} /> Add Customer
+          </button>
         </div>
       </div>
+
+      <BulkActionPanel 
+        selectedCount={selectedCustomerIds.length}
+        onClearSelection={() => setSelectedCustomerIds([])}
+        actions={[
+          { label: 'Delete', icon: <Trash2 size={16} />, onClick: handleBulkDelete, variant: 'danger' }
+        ]}
+      />
+
+      <AdvancedFilterPanel
+        searchTerm={search}
+        onSearchChange={(v) => { setSearch(v); setCurrentPage(1); }}
+        onClearFilters={clearFilters}
+        placeholder="Search by name, email, or phone..."
+        filters={[
+          {
+            id: 'type',
+            label: 'Customer Type',
+            value: filterType,
+            onChange: (v) => { setFilterType(v); setCurrentPage(1); },
+            options: [
+              { label: 'All Types', value: 'ALL' },
+              { label: 'Private', value: 'Private' },
+              { label: 'Fleet', value: 'Fleet' },
+              { label: 'Government', value: 'Government' },
+            ]
+          },
+          {
+            id: 'consent',
+            label: 'POPIA Consent',
+            value: filterConsent,
+            onChange: (v) => { setFilterConsent(v); setCurrentPage(1); },
+            options: [
+              { label: 'All', value: 'ALL' },
+              { label: 'Consented', value: 'Yes' },
+              { label: 'Pending', value: 'No' },
+            ]
+          }
+        ]}
+        presets={[
+          { label: 'Missing Consent', active: filterConsent === 'No', onClick: () => { setFilterConsent('No'); setCurrentPage(1); } },
+          { label: 'Fleet Customers', active: filterType === 'Fleet', onClick: () => { setFilterType('Fleet'); setCurrentPage(1); } }
+        ]}
+      />
 
       <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
         <table className="min-w-full divide-y divide-gray-200">
           <thead className="bg-gray-50">
             <tr>
+              <th className="px-6 py-3 text-center w-12">
+                <input
+                  type="checkbox"
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  checked={selectedCustomerIds.length === filteredCustomers.length && filteredCustomers.length > 0}
+                  ref={input => { if (input) input.indeterminate = selectedCustomerIds.length > 0 && selectedCustomerIds.length < filteredCustomers.length; }}
+                  onChange={e => {
+                    if (e.target.checked) setSelectedCustomerIds(filteredCustomers.map(c => c.id));
+                    else setSelectedCustomerIds([]);
+                  }}
+                />
+              </th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Name</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
@@ -254,7 +317,25 @@ export const Customers: React.FC = () => {
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
             {paginate<Customer>(filteredCustomers, currentPage, pageSize).map((c) => (
-              <tr key={c.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => handleEdit(c)}>
+              <tr 
+                key={c.id} 
+                className={`hover:bg-blue-50/50 cursor-pointer transition-colors ${selectedCustomerIds.includes(c.id) ? 'bg-blue-50/50' : ''}`} 
+                onClick={(e) => {
+                  if ((e.target as HTMLElement).tagName.toLowerCase() === 'input') return;
+                  handleEdit(c);
+                }}
+              >
+                <td className="px-6 py-4 text-center" onClick={e => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    checked={selectedCustomerIds.includes(c.id)}
+                    onChange={e => {
+                      if (e.target.checked) setSelectedCustomerIds([...selectedCustomerIds, c.id]);
+                      else setSelectedCustomerIds(selectedCustomerIds.filter(id => id !== c.id));
+                    }}
+                  />
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center">
                     <div className="flex-shrink-0 h-10 w-10 bg-slate-200 rounded-full flex items-center justify-center text-slate-600 font-bold">
@@ -309,7 +390,15 @@ export const Customers: React.FC = () => {
                     </span>
                   )}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-right">
+                <td className="px-6 py-4 whitespace-nowrap text-right flex justify-end gap-1">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleCreatePortalLink(c); }}
+                    disabled={portalLinkLoading === c.id}
+                    className="text-gray-300 hover:text-blue-500 transition-colors"
+                    title="Create portal link"
+                  >
+                    {portalLinkLoading === c.id ? <Loader2 size={16} className="animate-spin" /> : <Link2 size={16} />}
+                  </button>
                   {can(Permission.MANAGE_CUSTOMERS) && <button
                     onClick={(e) => { e.stopPropagation(); handleDelete(c.id, c.name); }}
                     className="text-gray-300 hover:text-red-500 transition-colors"

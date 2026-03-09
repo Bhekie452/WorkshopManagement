@@ -12,8 +12,13 @@ import {
   Plus, Filter, Search, Calendar, ChevronRight, X, BrainCircuit, Users, 
   Settings, PenTool, ClipboardList, MessageCircle, Mail, Smartphone,
   Clock, Package, AlertTriangle, CheckCircle2, History, Send, Gauge,
-  Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid, SlidersHorizontal, Printer
+  Paperclip, Image, FileText, Upload, Loader2, Trash2, LayoutList, LayoutGrid, SlidersHorizontal, Printer, Download
 } from 'lucide-react';
+import { AdvancedFilterPanel } from '../components/ui/AdvancedFilterPanel';
+import { BulkActionPanel } from '../components/ui/BulkActionPanel';
+import { ExportDataModal } from '../components/ui/ExportDataModal';
+import { ExportColumn } from '../utils/exportUtils';
+import { ApiCall } from '../services/api';
 
 // 10 Predefined Service Types
 const SERVICE_TYPES = [
@@ -76,6 +81,7 @@ export const Jobs: React.FC = () => {
     serviceType: '',
     description: '',
     estimatedCost: 0,
+    estimatedHours: 0,
     customerId: '',
     vehicleId: '',
     tasks: [],
@@ -90,13 +96,17 @@ export const Jobs: React.FC = () => {
   const [currentMileage, setCurrentMileage] = useState<number>(0);
 
   const [search, setSearch] = useState('');
-  const [filterStatus, setFilterStatus] = useState<JobStatus | 'ALL'>('ALL');
-  const [filterPriority, setFilterPriority] = useState<Priority | 'ALL'>('ALL');
+  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterPriority, setFilterPriority] = useState<string>('all');
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  
+  // Bulk Selection
+  const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
 
   useEffect(() => {
     refreshData();
@@ -126,6 +136,7 @@ export const Jobs: React.FC = () => {
         serviceType: 'General Service',
         description: '',
         estimatedCost: 0,
+        estimatedHours: 1,
         customerId: customers[0]?.id || '',
         vehicleId: vehicles[0]?.id || '',
         dueDate: new Date(Date.now() + 86400000).toISOString(),
@@ -259,19 +270,20 @@ export const Jobs: React.FC = () => {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const file = e.target.files[0];
-      
+    if (!e.target.files || e.target.files.length === 0) return;
+
+    const files = Array.from(e.target.files);
+    for (const file of files) {
       // Basic size check (5MB)
       if (file.size > 5 * 1024 * 1024) {
-        alert("File is too large. Max size is 5MB.");
-        return;
+        alert(`File "${file.name}" is too large. Max size is 5MB.`);
+        continue;
       }
 
       try {
         const base64 = await store.convertFileToBase64(file);
         const newAttachment: Attachment = {
-          id: Date.now().toString(),
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           fileName: file.name,
           fileType: file.type,
           fileSize: file.size,
@@ -281,18 +293,29 @@ export const Jobs: React.FC = () => {
         };
 
         const updatedAttachments = [newAttachment, ...(formData.attachments || [])];
-        setFormData({ ...formData, attachments: updatedAttachments });
-        
+        setFormData(prev => ({ ...prev, attachments: updatedAttachments }));
+
         // Auto-save if editing existing job
         if (selectedJob) {
           store.addJobAttachment(selectedJob.id, newAttachment);
           store.addJobLog(selectedJob.id, 'File Attached', `Uploaded ${file.name}`);
+          // Best-effort persist to backend attachments endpoint if the job exists there
+          ApiCall.post(`jobs/${selectedJob.id}/attachments`, {
+            filename: file.name,
+            file_type: file.type,
+            file_size: file.size,
+            file_url: base64,
+            description: 'Uploaded from Jobs page',
+          }).catch(() => {});
         }
       } catch (err) {
         console.error("Upload failed", err);
-        alert("Failed to upload file.");
+        alert(`Failed to upload "${file.name}".`);
       }
     }
+
+    // reset input so same file can be re-selected
+    e.target.value = '';
   };
 
   // Labour Handler
@@ -477,6 +500,86 @@ export const Jobs: React.FC = () => {
     }
   };
 
+  const handleBulkDelete = () => {
+    if (confirm(`Are you sure you want to delete ${selectedJobIds.length} jobs?`)) {
+      selectedJobIds.forEach(id => store.deleteJob(id));
+      setSelectedJobIds([]);
+      refreshData();
+    }
+  };
+
+  const handleBulkStatusChange = (status: JobStatus) => {
+    if (confirm(`Change status of ${selectedJobIds.length} jobs to ${status}?`)) {
+      selectedJobIds.forEach(id => {
+        const job = jobs.find(j => j.id === id);
+        if (job) store.updateJob({ ...job, status });
+      });
+      setSelectedJobIds([]);
+      refreshData();
+    }
+  };
+
+  const handleBulkGenerateInvoices = (type: 'Invoice' | 'Quote') => {
+    if (selectedJobIds.length === 0) return;
+
+    const label = type === 'Invoice' ? 'invoices' : 'quotes';
+    if (!confirm(`Generate ${label} for ${selectedJobIds.length} selected jobs?`)) return;
+
+    const createdNumbers: string[] = [];
+
+    selectedJobIds.forEach(jobId => {
+      const job = jobs.find(j => j.id === jobId);
+      if (!job) return;
+
+      const customer = customers.find(c => c.id === job.customerId);
+      const vehicle = vehicles.find(v => v.id === job.vehicleId);
+
+      const numberPrefix = type === 'Invoice' ? 'INV' : 'QT';
+      const docNumber = `${numberPrefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      const subtotal = job.estimatedCost || 0;
+      const taxAmount = subtotal * 0.15;
+      const total = subtotal + taxAmount;
+
+      store.addInvoice({
+        id: '', // let store assign
+        type,
+        jobId: job.id,
+        customerId: job.customerId,
+        vehicleId: job.vehicleId,
+        number: docNumber,
+        issueDate: new Date().toISOString(),
+        dueDate: new Date(Date.now() + (type === 'Quote' ? 30 : 7) * 86400000).toISOString(),
+        items: [
+          {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            description: `${job.serviceType} - ${job.description}`,
+            quantity: 1,
+            unitPrice: subtotal,
+            total: subtotal,
+          },
+        ],
+        subtotal,
+        taxAmount,
+        total,
+        status: 'Draft',
+        notes:
+          type === 'Quote'
+            ? `Auto-generated quote from Job ${job.id}`
+            : `Auto-generated invoice from Job ${job.id}`,
+      });
+
+      createdNumbers.push(docNumber);
+    });
+
+    setSelectedJobIds([]);
+    alert(
+      `${type === 'Invoice' ? 'Invoices' : 'Quotes'} created: ${
+        createdNumbers.length ? createdNumbers.join(', ') : 'none'
+      }`
+    );
+  };
+
   const filteredJobs = jobs.filter(job => {
     const matchesSearch = !search || (() => {
       const q = search.toLowerCase();
@@ -492,8 +595,8 @@ export const Jobs: React.FC = () => {
         (vehicle?.vin || '').toLowerCase().includes(q)
       );
     })();
-    const matchesFilter = filterStatus === 'ALL' || job.status === filterStatus;
-    const matchesPriority = filterPriority === 'ALL' || job.priority === filterPriority;
+    const matchesFilter = filterStatus === 'all' || job.status === filterStatus;
+    const matchesPriority = filterPriority === 'all' || job.priority === filterPriority;
     const matchesDateFrom = !filterDateFrom || job.createdAt >= filterDateFrom;
     const matchesDateTo = !filterDateTo || job.createdAt <= filterDateTo + 'T23:59:59';
     return matchesSearch && matchesFilter && matchesPriority && matchesDateFrom && matchesDateTo;
@@ -503,145 +606,126 @@ export const Jobs: React.FC = () => {
 
   const clearAllFilters = () => {
     setSearch('');
-    setFilterStatus('ALL');
-    setFilterPriority('ALL');
+    setFilterStatus('all');
+    setFilterPriority('all');
     setFilterDateFrom('');
     setFilterDateTo('');
     setCurrentPage(1);
+    setSelectedJobIds([]);
   };
 
   return (
     <div className="space-y-6">
+      <BulkActionPanel 
+        selectedCount={selectedJobIds.length}
+        onClearSelection={() => setSelectedJobIds([])}
+        actions={[
+          { label: 'Mark Completed', icon: <CheckCircle2 size={16} />, onClick: () => handleBulkStatusChange(JobStatus.COMPLETED), variant: 'primary' },
+          { label: 'Generate Invoices', icon: <FileText size={16} />, onClick: () => handleBulkGenerateInvoices('Invoice'), variant: 'primary' },
+          { label: 'Generate Quotes', icon: <FileText size={16} />, onClick: () => handleBulkGenerateInvoices('Quote'), variant: 'primary' },
+          { label: 'Delete', icon: <Trash2 size={16} />, onClick: handleBulkDelete, variant: 'danger' }
+        ]}
+      />
+      
+      <ExportDataModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        data={filteredJobs}
+        availableColumns={[
+          { header: 'Job ID', key: 'id' },
+          { header: 'Status', key: 'status' },
+          { header: 'Priority', key: 'priority' },
+          { header: 'Service Type', key: 'serviceType' },
+          { header: 'Customer', key: 'customerId', format: (id) => customers.find(c => c.id === id)?.name || id },
+          { header: 'Vehicle', key: 'vehicleId', format: (id) => { const v = vehicles.find(v => v.id === id); return v ? `${v.registration} (${v.make} ${v.model})` : id; } },
+          { header: 'Estimated Cost', key: 'estimatedCost' },
+          { header: 'Estimated Hours', key: 'estimatedHours' },
+          { header: 'Assigned To', key: 'assignedMechanicId' },
+          { header: 'Date Created', key: 'createdAt', format: (d) => new Date(d).toLocaleDateString() }
+        ]}
+        filename="jobs_export"
+      />
+
       {/* Header Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
             <h1 className="text-2xl font-bold text-gray-900">Job Management</h1>
             <p className="text-sm text-gray-500">Track jobs, manage workflow, and update customers.</p>
         </div>
-        <button 
-          onClick={handleCreate}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
-          disabled={!can(Permission.CREATE_JOB)}
-          title={!can(Permission.CREATE_JOB) ? 'You do not have permission to create jobs' : ''}
-        >
-          <Plus size={20} /> New Job Card
-        </button>
+        <div className="flex items-center gap-2">
+            <button
+                onClick={() => setIsExportModalOpen(true)}
+                className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
+            >
+                <Download size={20} /> Export
+            </button>
+            <button 
+              onClick={handleCreate}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              disabled={!can(Permission.CREATE_JOB)}
+              title={!can(Permission.CREATE_JOB) ? 'You do not have permission to create jobs' : ''}
+            >
+              <Plus size={20} /> New Job Card
+            </button>
+        </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-        <div className="p-4 flex flex-col gap-4">
-          {/* Row 1: Search + View Toggle */}
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-              <input 
-                type="text" 
-                placeholder="Search Job ID, vehicle, or service type..." 
-                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-300 outline-none transition-all"
-                value={search}
-                onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
-              />
-            </div>
-            <div className="flex items-center gap-1 border border-gray-200 rounded-lg p-0.5 bg-gray-50">
-              <button
-                onClick={() => setViewMode('list')}
-                className={`p-2 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
-                title="List View"
-              >
-                <LayoutList size={18} />
-              </button>
-              <button
-                onClick={() => setViewMode('grid')}
-                className={`p-2 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
-                title="Grid View"
-              >
-                <LayoutGrid size={18} />
-              </button>
-            </div>
-          </div>
-          {/* Row 2: Filter Pills */}
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5 text-sm text-gray-500 mr-1">
-              <SlidersHorizontal size={16} />
-              <span className="hidden sm:inline font-medium">Filters</span>
-              {activeFilterCount > 0 && (
-                <span className="bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeFilterCount}</span>
-              )}
-            </div>
-            {/* Status Filter */}
-            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
-              {['ALL', JobStatus.PENDING, JobStatus.IN_PROGRESS, JobStatus.AWAITING_PARTS, JobStatus.COMPLETED].map((status) => (
-                <button
-                  key={status}
-                  onClick={() => { setFilterStatus(status as any); setCurrentPage(1); }}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all ${
-                    filterStatus === status 
-                      ? 'bg-white shadow-sm border ' + (
-                          status === JobStatus.COMPLETED ? 'text-green-700 border-green-200' :
-                          status === JobStatus.IN_PROGRESS ? 'text-blue-700 border-blue-200' :
-                          status === JobStatus.AWAITING_PARTS ? 'text-amber-700 border-amber-200' :
-                          status === JobStatus.PENDING ? 'text-gray-700 border-gray-300' :
-                          'text-blue-700 border-blue-200'
-                        )
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {status === 'ALL' ? 'All' : status}
-                </button>
-              ))}
-            </div>
-            {/* Priority Filter */}
-            <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
-              {['ALL', Priority.LOW, Priority.MEDIUM, Priority.HIGH, Priority.URGENT].map((pri) => (
-                <button
-                  key={pri}
-                  onClick={() => { setFilterPriority(pri as any); setCurrentPage(1); }}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition-all ${
-                    filterPriority === pri
-                      ? 'bg-white shadow-sm border ' + (
-                          pri === Priority.URGENT ? 'text-red-700 border-red-200' :
-                          pri === Priority.HIGH ? 'text-orange-700 border-orange-200' :
-                          pri === Priority.MEDIUM ? 'text-yellow-700 border-yellow-200' :
-                          pri === Priority.LOW ? 'text-green-700 border-green-200' :
-                          'text-blue-700 border-blue-200'
-                        )
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {pri === 'ALL' ? 'Priority' : pri}
-                </button>
-              ))}
-            </div>
-            {/* Date Range Filter */}
-            <div className="flex items-center gap-1.5 bg-gray-50 rounded-lg border border-gray-200 p-1 px-2">
-              <Calendar size={14} className="text-gray-400 shrink-0" />
-              <input
-                type="date"
-                value={filterDateFrom}
-                onChange={e => { setFilterDateFrom(e.target.value); setCurrentPage(1); }}
-                className={`text-xs bg-transparent outline-none w-[110px] ${filterDateFrom ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}
-                title="From date"
-              />
-              <span className="text-gray-300 text-xs">—</span>
-              <input
-                type="date"
-                value={filterDateTo}
-                onChange={e => { setFilterDateTo(e.target.value); setCurrentPage(1); }}
-                className={`text-xs bg-transparent outline-none w-[110px] ${filterDateTo ? 'text-blue-700 font-semibold' : 'text-gray-400'}`}
-                title="To date"
-              />
-            </div>
-            {/* Clear Filters */}
-            {activeFilterCount > 0 && (
-              <button
-                onClick={clearAllFilters}
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-              >
-                <X size={14} /> Clear
-              </button>
-            )}
-          </div>
+      <AdvancedFilterPanel
+        searchTerm={search}
+        onSearchChange={(v) => { setSearch(v); setCurrentPage(1); }}
+        onClearFilters={clearAllFilters}
+        placeholder="Search Job ID, vehicle, or description..."
+        filters={[
+          {
+            id: 'status',
+            label: 'Job Status',
+            value: filterStatus,
+            onChange: (v) => { setFilterStatus(v); setCurrentPage(1); },
+            options: [
+              { label: 'All Statuses', value: 'all' },
+              { label: 'Pending', value: JobStatus.PENDING },
+              { label: 'In Progress', value: JobStatus.IN_PROGRESS },
+              { label: 'Awaiting Parts', value: JobStatus.AWAITING_PARTS },
+              { label: 'Completed', value: JobStatus.COMPLETED },
+            ]
+          },
+          {
+            id: 'priority',
+            label: 'Priority Level',
+            value: filterPriority,
+            onChange: (v) => { setFilterPriority(v); setCurrentPage(1); },
+            options: [
+              { label: 'All Priorities', value: 'all' },
+              { label: 'Low', value: Priority.LOW },
+              { label: 'Medium', value: Priority.MEDIUM },
+              { label: 'High', value: Priority.HIGH },
+              { label: 'Urgent', value: Priority.URGENT },
+            ]
+          }
+        ]}
+        presets={[
+          { label: 'Overdue / Urgent', active: filterPriority === Priority.URGENT, onClick: () => { setFilterPriority(Priority.URGENT); setCurrentPage(1); } },
+          { label: 'Completed This Week', active: filterStatus === JobStatus.COMPLETED, onClick: () => { setFilterStatus(JobStatus.COMPLETED); setCurrentPage(1); } }
+        ]}
+      />
+
+      {/* View Toggle Bar (Extracted from old filters so we still have viewMode toggle) */}
+      <div className="flex justify-end mb-4">
+        <div className="flex items-center gap-1 border border-gray-200 rounded-lg p-0.5 bg-gray-50">
+          <button
+            onClick={() => setViewMode('list')}
+            className={`p-2 rounded-md transition-all ${viewMode === 'list' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
+            title="List View"
+          >
+            <LayoutList size={18} />
+          </button>
+          <button
+            onClick={() => setViewMode('grid')}
+            className={`p-2 rounded-md transition-all ${viewMode === 'grid' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-400 hover:text-gray-600'}`}
+            title="Grid View"
+          >
+            <LayoutGrid size={18} />
+          </button>
         </div>
       </div>
 
@@ -653,6 +737,18 @@ export const Jobs: React.FC = () => {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-4 py-3 text-center">
+                    <input 
+                      type="checkbox" 
+                      className="rounded border-gray-300 text-blue-600"
+                      checked={selectedJobIds.length === filteredJobs.length && filteredJobs.length > 0}
+                      ref={input => { if (input) input.indeterminate = selectedJobIds.length > 0 && selectedJobIds.length < filteredJobs.length }}
+                      onChange={(e) => {
+                        if (e.target.checked) setSelectedJobIds(filteredJobs.map(j => j.id));
+                        else setSelectedJobIds([]);
+                      }}
+                    />
+                  </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Service</th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
@@ -674,9 +770,23 @@ export const Jobs: React.FC = () => {
                     return (
                       <tr
                         key={job.id}
-                        onClick={() => handleEdit(job)}
-                        className="hover:bg-blue-50 cursor-pointer transition-colors"
+                        onClick={(e) => {
+                          if ((e.target as HTMLElement).tagName.toLowerCase() === 'input') return;
+                          handleEdit(job);
+                        }}
+                        className={`hover:bg-blue-50 cursor-pointer transition-colors ${selectedJobIds.includes(job.id) ? 'bg-blue-50/50' : ''}`}
                       >
+                        <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
+                          <input 
+                            type="checkbox" 
+                            className="rounded border-gray-300 text-blue-600"
+                            checked={selectedJobIds.includes(job.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) setSelectedJobIds([...selectedJobIds, job.id]);
+                              else setSelectedJobIds(selectedJobIds.filter(id => id !== job.id));
+                            }}
+                          />
+                        </td>
                         <td className="px-4 py-3 whitespace-nowrap">
                           <span className="font-mono text-xs font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">{job.id.substring(0, 8)}...</span>
                         </td>
@@ -930,6 +1040,19 @@ export const Jobs: React.FC = () => {
                                         {Object.values(JobStatus).map(s => <option key={s} value={s}>{s}</option>)}
                                     </select>
                                 </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Estimated Hours</label>
+                                    <div className="relative">
+                                        <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
+                                        <input 
+                                            type="number"
+                                            step="0.5"
+                                            className="w-full border border-gray-300 rounded-lg p-2.5 pl-10 focus:ring-2 focus:ring-blue-500 outline-none"
+                                            value={formData.estimatedHours || 0}
+                                            onChange={e => setFormData({...formData, estimatedHours: parseFloat(e.target.value) || 0})}
+                                        />
+                                    </div>
+                                </div>
                                 {/* Timeline */}
                                 <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
@@ -951,6 +1074,34 @@ export const Jobs: React.FC = () => {
                                     />
                                   </div>
                                 )}
+                                {selectedJob && formData.startedAt && (
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-1">Started</label>
+                                    <div className="flex items-center gap-2">
+                                        <input 
+                                            type="text"
+                                            readOnly
+                                            className="flex-1 border border-blue-200 rounded-lg p-2.5 bg-blue-50 text-blue-700 cursor-not-allowed"
+                                            value={new Date(formData.startedAt).toLocaleString()}
+                                        />
+                                        {formData.status === JobStatus.IN_PROGRESS && (
+                                            <div className="bg-blue-600 text-white px-3 py-2.5 rounded-lg flex items-center gap-2 animate-pulse shadow-sm">
+                                                <Clock size={16} />
+                                                <span className="text-xs font-bold whitespace-nowrap">
+                                                    {(() => {
+                                                        const start = new Date(formData.startedAt).getTime();
+                                                        const now = new Date().getTime();
+                                                        const diff = now - start;
+                                                        const h = Math.floor(diff / 3600000);
+                                                        const m = Math.floor((diff % 3600000) / 60000);
+                                                        return `${h}h ${m}m`;
+                                                    })()}
+                                                </span>
+                                            </div>
+                                        )}
+                                    </div>
+                                  </div>
+                                )}
                                 {selectedJob && formData.completedAt && (
                                   <div>
                                     <label className="block text-sm font-medium text-gray-700 mb-1">Completed</label>
@@ -958,7 +1109,7 @@ export const Jobs: React.FC = () => {
                                         type="text"
                                         readOnly
                                         className="w-full border border-green-200 rounded-lg p-2.5 bg-green-50 text-green-700 cursor-not-allowed"
-                                        value={new Date(formData.completedAt).toLocaleDateString()}
+                                        value={new Date(formData.completedAt).toLocaleString()}
                                     />
                                   </div>
                                 )}
@@ -1415,17 +1566,41 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                             <div key={file.id} className="group relative border rounded-lg p-2 hover:shadow-md transition-all bg-white">
                                {file.fileType.startsWith('image/') ? (
                                  <div className="aspect-square bg-gray-100 rounded mb-2 overflow-hidden">
-                                   <img src={file.dataUrl} alt={file.fileName} className="w-full h-full object-cover" />
+                                   <img
+                                     src={file.dataUrl}
+                                     alt={file.fileName}
+                                     className="w-full h-full object-cover cursor-pointer"
+                                     onClick={() => window.open(file.dataUrl, '_blank')}
+                                   />
                                  </div>
                                ) : (
-                                 <div className="aspect-square bg-blue-50 rounded mb-2 flex items-center justify-center text-blue-500">
+                                 <div
+                                   className="aspect-square bg-blue-50 rounded mb-2 flex items-center justify-center text-blue-500 cursor-pointer"
+                                   onClick={() => window.open(file.dataUrl, '_blank')}
+                                   title="Open"
+                                 >
                                    <FileText size={32} />
                                  </div>
                                )}
                                <p className="text-xs font-medium truncate" title={file.fileName}>{file.fileName}</p>
                                <p className="text-[10px] text-gray-500">{(file.fileSize / 1024).toFixed(1)} KB</p>
                                <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                  <button className="bg-white rounded-full p-1 shadow hover:text-red-600">
+                                 <button
+                                   className="bg-white rounded-full p-1 shadow hover:text-red-600"
+                                   title="Remove"
+                                   onClick={() => {
+                                     // update local form immediately
+                                     setFormData(prev => ({
+                                       ...prev,
+                                       attachments: (prev.attachments || []).filter(a => a.id !== file.id),
+                                     }));
+                                     if (selectedJob) {
+                                       store.deleteJobAttachment(selectedJob.id, file.id);
+                                       store.addJobLog(selectedJob.id, 'File Removed', `Removed ${file.fileName}`);
+                                       ApiCall.delete(`jobs/${selectedJob.id}/attachments/${file.id}`).catch(() => {});
+                                     }
+                                   }}
+                                 >
                                     <X size={12} />
                                   </button>
                                </div>
@@ -1440,14 +1615,13 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
               )}
 
               {/* === TAB: COMMUNICATION === */}
-              {activeTab === 'communication' && (() => {
+              {activeTab === 'communication' && (function() {
                   const commCustomer = customers.find(c => c.id === formData.customerId);
                   const pref = commCustomer?.preferredContact || 'both';
                   const prefLabel = pref === 'email' ? 'Email' : pref === 'phone' ? 'Phone / SMS' : 'Email & Phone';
                   const wantsEmail = pref === 'email' || pref === 'both';
                   const wantsPhone = pref === 'phone' || pref === 'both';
 
-                  // Helper: send to all preferred channels for a given template
                   const sendPreferred = async (template: string) => {
                       if (wantsEmail) {
                           await sendNotification('EMAIL', template);
@@ -1463,7 +1637,6 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                           <h3 className="font-bold text-gray-900 text-lg">Customer Notifications</h3>
                           <p className="text-gray-500 text-sm">Send predefined updates to the customer via their preferred channel.</p>
 
-                          {/* Preferred channel badge */}
                           {commCustomer && (
                               <div className="flex items-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg">
                                   <span className="text-sm font-medium text-indigo-700">Preferred channel:</span>
@@ -1550,7 +1723,7 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                       </div>
                   </div>
                   );
-              })()}
+              })() }
 
               {/* === TAB: HISTORY (LOGS) === */}
               {activeTab === 'history' && (
@@ -1826,7 +1999,7 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                       <tbody className="divide-y divide-gray-100">
                         {printingJob.partsUsed.map(part => {
                           const p = inventory.find(inv => inv.id === part.partId);
-                          const unitPrice = part.priceAtTime || 0;
+                          const unitPrice = part.unitCost || 0;
                           return (
                             <tr key={part.id}>
                               <td className="px-4 py-2 text-gray-800">{p?.name || part.partId}</td>
@@ -1879,7 +2052,7 @@ Generate 5-10 relevant tasks. No markdown, no explanation, just the JSON array.`
                   <div className="w-72">
                     <div className="flex justify-between py-2 text-sm">
                       <span className="text-gray-600">Parts Total:</span>
-                      <span className="font-semibold">R{(printingJob.partsUsed?.reduce((sum, p) => sum + (p.quantity * (p.priceAtTime || 0)), 0) || 0).toLocaleString()}</span>
+                      <span className="font-semibold">R{(printingJob.partsUsed?.reduce((sum, p) => sum + (p.quantity * (p.unitCost || 0)), 0) || 0).toLocaleString()}</span>
                     </div>
                     <div className="flex justify-between py-2 text-sm">
                       <span className="text-gray-600">Labour Total:</span>

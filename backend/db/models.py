@@ -228,6 +228,7 @@ class Vehicle(Base):
     jobs: Mapped[List["Job"]] = relationship("Job", back_populates="vehicle")
     mileage_history: Mapped[List["MileageRecord"]] = relationship("MileageRecord", back_populates="vehicle")
     diagnostics: Mapped[List["DiagnosticRecord"]] = relationship("DiagnosticRecord", back_populates="vehicle")
+    battery_history: Mapped[List["EVBatteryRUL"]] = relationship("EVBatteryRUL", back_populates="vehicle")
 
     __table_args__ = (
         Index('idx_vehicle_make_model', 'make', 'model'),
@@ -260,6 +261,7 @@ class Job(Base):
     
     estimated_cost: Mapped[float] = mapped_column(Float, default=0)
     actual_cost: Mapped[Optional[float]] = mapped_column(Float)
+    estimated_hours: Mapped[float] = mapped_column(Float, default=0)
     
     due_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -267,6 +269,15 @@ class Job(Base):
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    @property
+    def actual_hours(self) -> float:
+        return sum(l.hours for l in self.labor_log)
+
+    @property
+    def time_variance(self) -> float:
+        """Actual hours - Estimated hours (Positive means over, Negative means under)"""
+        return self.actual_hours - self.estimated_hours
 
     # Relationships
     customer: Mapped["Customer"] = relationship("Customer", back_populates="jobs")
@@ -557,6 +568,7 @@ class DiagnosticRecord(Base):
     symptoms: Mapped[Optional[str]] = mapped_column(Text)
     dtc_codes: Mapped[Optional[list]] = mapped_column(JSON)  # List of DTC codes
     ai_analysis: Mapped[Optional[str]] = mapped_column(Text)
+    battery_telemetry: Mapped[Optional[dict]] = mapped_column(JSON)  # EV battery data at time of diagnostic
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     # Relationships
@@ -588,6 +600,24 @@ class VoiceCommand(Base):
     response_text: Mapped[Optional[str]] = mapped_column(Text)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     context: Mapped[Optional[str]] = mapped_column(String(100))
+
+
+class EVBatteryRUL(Base):
+    """Battery RUL prediction history."""
+    __tablename__ = "ev_battery_rul_history"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    vehicle_id: Mapped[str] = mapped_column(String(36), ForeignKey("vehicles.id"), nullable=False)
+    diagnostic_id: Mapped[Optional[str]] = mapped_column(String(36), ForeignKey("diagnostic_records.id"))
+    rul_months: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float)
+    health_status: Mapped[str] = mapped_column(String(50))
+    current_soh: Mapped[float] = mapped_column(Float)
+    recommendations: Mapped[Optional[list]] = mapped_column(JSON)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    vehicle: Mapped["Vehicle"] = relationship("Vehicle", back_populates="battery_history")
 
 
 # =============================================================================

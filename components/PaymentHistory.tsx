@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { invoicePaymentService, PaymentTransaction } from '../../services/invoicePaymentService';
-import { LoadingSpinner } from './LoadingSpinner';
+import { invoicePaymentService, PaymentTransaction } from '../services/invoicePaymentService';
+import { LoadingSpinner } from './ui/LoadingSpinner';
 import { AlertCircle, CheckCircle, Clock, XCircle } from 'lucide-react';
 
 interface PaymentHistoryProps {

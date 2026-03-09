@@ -116,15 +116,83 @@ export const Schedule: React.FC = () => {
     }
   };
 
+  const hasConflict = (startIso?: string, endIso?: string, customerId?: string, excludeId?: string | null) => {
+    if (!startIso || !endIso || !customerId) return false;
+    const start = new Date(startIso);
+    const end = new Date(endIso);
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return false;
+
+    return appointments.some(a => {
+      if (a.id === excludeId) return false;
+      if (a.customerId !== customerId) return false;
+      const aStart = new Date(a.start);
+      const aEnd = new Date(a.end);
+      return aStart < end && aEnd > start;
+    });
+  };
+
+  const createRecurrenceSeries = (base: Appointment) => {
+    if (!base.recurrence || base.recurrence === 'None') return;
+
+    const occurrences = 3; // create next 3 occurrences
+    const baseStart = new Date(base.start);
+    const baseEnd = new Date(base.end);
+
+    for (let i = 1; i <= occurrences; i++) {
+      const nextStart = new Date(baseStart);
+      const nextEnd = new Date(baseEnd);
+
+      switch (base.recurrence) {
+        case 'Daily':
+          nextStart.setDate(nextStart.getDate() + i);
+          nextEnd.setDate(nextEnd.getDate() + i);
+          break;
+        case 'Weekly':
+          nextStart.setDate(nextStart.getDate() + 7 * i);
+          nextEnd.setDate(nextEnd.getDate() + 7 * i);
+          break;
+        case 'Monthly':
+          nextStart.setMonth(nextStart.getMonth() + i);
+          nextEnd.setMonth(nextEnd.getMonth() + i);
+          break;
+      }
+
+      store.addAppointment({
+        ...base,
+        id: '', // let store generate new ID
+        start: nextStart.toISOString(),
+        end: nextEnd.toISOString(),
+        recurrence: 'None',
+      } as Appointment);
+    }
+  };
+
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.title || !formData.customerId) return;
-    
+
+    const startIso = formData.start;
+    const endIso = formData.end;
+    if (!startIso || !endIso) return;
+
+    if (new Date(startIso) >= new Date(endIso)) {
+      alert('End time must be after start time.');
+      return;
+    }
+
+    if (hasConflict(startIso, endIso, formData.customerId, editingId)) {
+      const proceed = confirm(
+        'This customer already has an overlapping appointment in this time range.\n\nDo you want to schedule it anyway?'
+      );
+      if (!proceed) return;
+    }
+
     if (editingId) {
       store.updateAppointment(editingId, formData);
     } else {
-      store.addAppointment(formData as Appointment);
-      
+      const created = store.addAppointment(formData as Appointment);
+      createRecurrenceSeries(created);
+
       // Send appointment confirmation SMS + Email
       const customer = customers.find(c => c.id === formData.customerId);
       const vehicle = formData.vehicleId ? vehicles.find(v => v.id === formData.vehicleId) : null;
@@ -149,6 +217,57 @@ export const Schedule: React.FC = () => {
     setIsModalOpen(false);
     setEditingId(null);
     refreshData();
+  };
+
+  const handleQuickCreate = (day: Date, hour: number) => {
+    const start = new Date(day);
+    start.setHours(hour, 0, 0, 0);
+    const end = new Date(start);
+    end.setHours(hour + 1, 0, 0, 0);
+
+    setEditingId(null);
+    setFormData(prev => ({
+      ...prev,
+      type: prev.type || 'Service',
+      status: 'Scheduled',
+      recurrence: prev.recurrence || 'None',
+      start: start.toISOString(),
+      end: end.toISOString(),
+    }));
+    setIsModalOpen(true);
+  };
+
+  const suggestNextAvailableSlot = () => {
+    if (!formData.customerId) {
+      alert('Select a customer first to get availability suggestions.');
+      return;
+    }
+
+    const searchStart = new Date();
+    searchStart.setHours(8, 0, 0, 0);
+
+    for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
+      const day = new Date(searchStart);
+      day.setDate(searchStart.getDate() + dayOffset);
+
+      for (let hour = 8; hour <= 17; hour++) {
+        const start = new Date(day);
+        start.setHours(hour, 0, 0, 0);
+        const end = new Date(start);
+        end.setHours(hour + 1, 0, 0, 0);
+
+        if (!hasConflict(start.toISOString(), end.toISOString(), formData.customerId || undefined, editingId)) {
+          setFormData(prev => ({
+            ...prev,
+            start: start.toISOString(),
+            end: end.toISOString(),
+          }));
+          return;
+        }
+      }
+    }
+
+    alert('No free 1-hour slots found for this customer in the next 14 days.');
   };
 
   // --- VIEWS ---
@@ -243,8 +362,12 @@ export const Schedule: React.FC = () => {
                             {hour}:00
                         </div>
                         {daysToShow.map(day => (
-                            <div key={day.toISOString()} className="flex-1 border-r border-gray-100 relative group hover:bg-gray-50/50">
-                                {/* Click to add slot logic would go here */}
+                            <div 
+                                key={day.toISOString()} 
+                                className="flex-1 border-r border-gray-100 relative group hover:bg-gray-50/50"
+                                onClick={() => handleQuickCreate(day, hour)}
+                                title="Click to quickly schedule a 1‑hour appointment in this slot"
+                            >
                             </div>
                         ))}
                     </div>

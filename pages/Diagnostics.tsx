@@ -5,9 +5,10 @@ import { FirestoreService } from '../services/firestore';
 import { GoogleGenAI } from "@google/genai";
 import { Activity, Cpu, Search, BrainCircuit, Terminal, Save, CheckCircle2 } from 'lucide-react';
 import { DiagnosticRecord } from '../types';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export const Diagnostics: React.FC = () => {
-    const [activeTab, setActiveTab] = useState<'symptoms' | 'dtc' | 'vin' | 'history'>('symptoms');
+    const [activeTab, setActiveTab] = useState<'symptoms' | 'dtc' | 'vin' | 'history' | 'battery'>('symptoms');
   const [vehicles] = useState(store.getVehicles());
   const [selectedVehicleId, setSelectedVehicleId] = useState('');
   
@@ -27,6 +28,20 @@ export const Diagnostics: React.FC = () => {
     const [vin, setVin] = useState('');
     const [vinResult, setVinResult] = useState<any>(null);
     const [vinError, setVinError] = useState('');
+
+    // Battery Analysis State
+    const [telemetry, setTelemetry] = useState({
+        current_soh: 85,
+        cycle_count: 500,
+        avg_temperature: 25,
+        fast_charge_ratio: 0.2,
+        age_months: 24,
+        avg_dod: 50,
+        capacity_kwh: 75,
+        ambient_temp_avg: 22,
+    });
+    const [batteryHealth, setBatteryHealth] = useState<any>(null);
+    const [isPredicting, setIsPredicting] = useState(false);
 
     // Simple VIN decode logic (for demo; real-world would call an API)
     const handleVinDecode = () => {
@@ -116,6 +131,28 @@ export const Diagnostics: React.FC = () => {
     alert("Diagnostic record saved to history.");
   };
 
+  const handleBatteryAnalysis = async () => {
+    if (!selectedVehicleId) return;
+    setIsPredicting(true);
+    try {
+        await (store as any).addDiagnosticWithRUL({
+            vehicleId: selectedVehicleId,
+            date: new Date().toISOString(),
+            symptoms: 'Battery Health Check',
+            dtcCodes: [],
+            aiAnalysis: 'Self-triggered battery health analysis'
+        }, telemetry);
+        
+        const health = await (store as any).getBatteryHealth(selectedVehicleId);
+        setBatteryHealth(health);
+    } catch (err) {
+        console.error(err);
+        alert("Failed to run battery analysis. Ensure backend is running.");
+    } finally {
+        setIsPredicting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -155,6 +192,12 @@ export const Diagnostics: React.FC = () => {
                 className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'history' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
             >
                  <span className="flex items-center gap-2"><Activity size={16} /> Diagnostic History</span>
+            </button>
+            <button 
+                onClick={() => setActiveTab('battery')}
+                className={`pb-4 px-2 font-medium text-sm transition-colors ${activeTab === 'battery' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+                 <span className="flex items-center gap-2"><Cpu size={16} /> EV Battery AI Analysis</span>
             </button>
                     {/* VIN DECODER TAB */}
                     {activeTab === 'vin' && (
@@ -318,6 +361,162 @@ export const Diagnostics: React.FC = () => {
                         ))}
                     </tbody>
                 </table>
+            </div>
+        )}
+
+        {/* EV BATTERY ANALYSIS TAB */}
+        {activeTab === 'battery' && (
+            <div className="p-6 grid grid-cols-1 lg:grid-cols-2 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-bold text-gray-900 font-premium">Battery Telemetry</h3>
+                        <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-1 rounded-full font-bold tracking-wider">EV EXCLUSIVE</span>
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-tight">Current SOH (%)</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm"
+                                value={telemetry.current_soh}
+                                onChange={e => setTelemetry({...telemetry, current_soh: parseFloat(e.target.value)})}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-tight">Cycle Count</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm"
+                                value={telemetry.cycle_count}
+                                onChange={e => setTelemetry({...telemetry, cycle_count: parseInt(e.target.value)})}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-tight">Avg Temperature (°C)</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm"
+                                value={telemetry.avg_temperature}
+                                onChange={e => setTelemetry({...telemetry, avg_temperature: parseFloat(e.target.value)})}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-tight">Fast Charge Ratio (0-1)</label>
+                            <input 
+                                type="number" step="0.1"
+                                className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm"
+                                value={telemetry.fast_charge_ratio}
+                                onChange={e => setTelemetry({...telemetry, fast_charge_ratio: parseFloat(e.target.value)})}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-tight">Age (Months)</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm"
+                                value={telemetry.age_months}
+                                onChange={e => setTelemetry({...telemetry, age_months: parseInt(e.target.value)})}
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-tight">Avg DOD (%)</label>
+                            <input 
+                                type="number" 
+                                className="w-full p-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white text-sm"
+                                value={telemetry.avg_dod}
+                                onChange={e => setTelemetry({...telemetry, avg_dod: parseFloat(e.target.value)})}
+                            />
+                        </div>
+                    </div>
+
+                    <button 
+                        onClick={handleBatteryAnalysis}
+                        disabled={isPredicting || !selectedVehicleId}
+                        className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white py-3 rounded-xl font-bold flex items-center justify-center gap-2 disabled:opacity-50 mt-4 transition-all shadow-md active:scale-95"
+                    >
+                        {isPredicting ? (
+                            <><Activity className="animate-spin" size={20} /> Calculating Prediction...</>
+                        ) : (
+                            <><BrainCircuit size={20} /> Run AI Prediction</>
+                        )}
+                    </button>
+                    {!selectedVehicleId && <p className="text-[10px] text-red-500 text-center font-bold uppercase tracking-widest mt-2 animate-pulse">Select a vehicle to begin</p>}
+                </div>
+
+                <div className="bg-slate-50 rounded-2xl p-6 border border-slate-100 h-full overflow-y-auto max-h-[600px] glass-morphism">
+                    <h3 className="text-lg font-bold text-gray-900 mb-6 flex items-center gap-2">
+                        <Activity size={20} className="text-blue-500" /> AI Insights
+                    </h3>
+                    
+                    {batteryHealth?.current ? (
+                        <div className="space-y-6">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="bg-white p-4 rounded-xl border border-slate-200/50 shadow-sm transition-transform hover:scale-[1.02]">
+                                    <p className="text-[10px] text-slate-400 uppercase font-black mb-1 tracking-wider">Remaining Life</p>
+                                    <p className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-br from-blue-600 to-indigo-600">
+                                        {batteryHealth.current.rulMonths} <span className="text-sm font-medium text-slate-400">Months</span>
+                                    </p>
+                                </div>
+                                <div className="bg-white p-4 rounded-xl border border-slate-200/50 shadow-sm transition-transform hover:scale-[1.02]">
+                                    <p className="text-[10px] text-slate-400 uppercase font-black mb-1 tracking-wider">Condition</p>
+                                    <p className={`text-xl font-black ${
+                                        batteryHealth.current.status === 'Excellent' ? 'text-emerald-600' :
+                                        batteryHealth.current.status === 'Good' ? 'text-blue-600' :
+                                        batteryHealth.current.status === 'Fair' ? 'text-amber-500' :
+                                        'text-rose-600'
+                                    }`}>{batteryHealth.current.status}</p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white p-5 rounded-xl border border-slate-200/50 shadow-sm">
+                                <div className="flex items-center justify-between mb-4">
+                                    <p className="text-[10px] text-slate-400 uppercase font-black tracking-wider">SOH History %</p>
+                                    <span className="text-[10px] text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-full">LIVE FEED</span>
+                                </div>
+                                <div className="h-44 w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <LineChart data={[...batteryHealth.history].reverse()}>
+                                            <XAxis dataKey="createdAt" hide />
+                                            <YAxis domain={['auto', 'auto']} hide />
+                                            <Tooltip 
+                                                contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                                            />
+                                            <Line 
+                                                type="monotone" 
+                                                dataKey="soh" 
+                                                stroke="#4f46e5" 
+                                                strokeWidth={3} 
+                                                dot={{ r: 4, fill: '#4f46e5', strokeWidth: 2, stroke: '#fff' }} 
+                                                activeDot={{ r: 6, fill: '#4f46e5' }}
+                                            />
+                                        </LineChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            </div>
+
+                            <div className="bg-slate-900/5 rounded-xl p-5 border border-slate-200/50">
+                                <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest mb-3 flex items-center gap-2">
+                                    <Search size={14} className="text-indigo-500" /> Professional Recommendations
+                                </h4>
+                                <ul className="space-y-3">
+                                    {batteryHealth.current.recommendations.map((rec: string, i: number) => (
+                                        <li key={i} className="text-sm text-gray-700 flex gap-3 leading-tight font-medium">
+                                            <CheckCircle2 size={16} className="text-emerald-500 flex-shrink-0 mt-0.5" /> 
+                                            <span>{rec}</span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="h-full flex flex-col items-center justify-center text-gray-400 py-16 opacity-50">
+                            <Cpu size={64} className="mb-4 stroke-[1px]" />
+                            <p className="text-sm font-bold uppercase tracking-widest">Awaiting Data Signature</p>
+                            <p className="text-[10px] text-center mt-2 max-w-[200px]">Perform an AI Prediction sweep to generate battery health insights.</p>
+                        </div>
+                    )}
+                </div>
             </div>
         )}
       </div>

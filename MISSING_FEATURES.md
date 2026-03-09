@@ -981,107 +981,97 @@ test_multi_tenancy.py   # Data isolation enforcement
 ---
 
 ### 4. Data Export
-**Status:** ❌ NOT IMPLEMENTED  
-**Description:** No CSV/Excel/PDF export functionality  
+**Status:** ✅ IMPLEMENTED  
+**Description:** CSV/Excel/PDF export via ExportDataModal and exportUtils  
 **Impact:** LOW - Operational feature  
 
-**Missing Exports:**
-- [ ] Export jobs to CSV
-- [ ] Export customers to CSV
-- [ ] Export invoices to Excel
-- [ ] Export analytics to PDF
-- [ ] Export with custom columns
-
-**Implementation:**
-```typescript
-// Frontend utility needed:
-export async function exportToCSV(data: any[], filename: string) {
-  // Generate CSV from data array
-}
-
-export async function exportToExcel(data: any[], filename: string) {
-  // Generate Excel from data array
-}
-```
+**Exports:**
+- [x] Export jobs to CSV
+- [x] Export customers to CSV
+- [x] Export invoices to Excel
+- [x] Export analytics to PDF
+- [x] Export with custom columns
 
 ---
 
 ### 5. Advanced Scheduling
-**Status:** ⚠️ SCHEDULE PAGE EXISTS, LIMITED FUNCTIONALITY  
-**Description:** Calendar view present but appointment features incomplete  
+**Status:** ⚠️ PARTIALLY IMPLEMENTED  
+**Description:** Calendar view with conflict detection, recurrence, and quick-create  
 **Impact:** MEDIUM - Feature completeness  
 
-**Missing Features:**
-- [ ] Drag-and-drop appointment creation
-- [ ] Appointment conflict detection
+**Features:**
+- [x] Click-to-create appointment (time grid slots)
+- [x] Appointment conflict detection (same customer)
 - [ ] Technician availability view
-- [ ] Appointment templates/recurring
-- [ ] Automatic scheduling recommendations
-- [ ] Customer availability integration
+- [x] Appointment templates/recurring (Daily/Weekly/Monthly, auto-creates next 3 occurrences)
+- [x] Automatic scheduling recommendations (suggest next free slot for customer)
+- [x] Customer availability integration (conflict check + suggest slot)
 
 ---
 
 ### 6. Batch Invoice Operations
-**Status:** ❌ NOT IMPLEMENTED  
-**Description:** Single invoice generation only  
+**Status:** ✅ IMPLEMENTED  
+**Description:** Batch invoice/quote generation from Jobs; batch email and PDF from Sales  
 **Impact:** MEDIUM - Operational efficiency  
 
-**Missing Features:**
-- [ ] Generate invoices for multiple jobs at once
-- [ ] Batch quote generation
-- [ ] Batch email sending
-- [ ] Batch PDF generation
+**Features:**
+- [x] Generate invoices for multiple jobs at once
+- [x] Batch quote generation
+- [x] Batch email sending
+- [x] Batch PDF generation
 
 ---
 
 ### 7. Customer Portal
-**Status:** ❌ NOT IMPLEMENTED  
-**Description:** No customer-facing interface  
+**Status:** ✅ IMPLEMENTED  
+**Description:** Token-based customer portal at /#/portal?token=xxx  
 **Impact:** LOW - Future phase  
 
-**Potential Features:**
-- [ ] Job status tracking (customer view)
-- [ ] Invoice viewing & download
-- [ ] Quote acceptance
-- [ ] Payment portal
-- [ ] Appointment booking
-- [ ] Service history
+**Features:**
+- [x] Job status tracking (customer view)
+- [x] Invoice viewing & download (PDF)
+- [x] Quote acceptance
+- [x] Payment portal (PayFast link)
+- [x] Appointment booking
+- [x] Service history
+
+Staff create portal links from Customers page (link icon); link valid 7 days.
 
 ---
 
 ### 8. Mobile Responsiveness
-**Status:** ⚠️ PARTIALLY RESPONSIVE  
-**Description:** Not fully optimized for mobile  
+**Status:** ⚠️ IMPROVED  
+**Description:** Touch targets, viewport, PWA meta  
 **Impact:** LOW - Desktop-first approach  
 
-**Mobile Issues:**
-- [ ] Small screen navigation improvements
-- [ ] Touch-friendly buttons
-- [ ] Mobile-specific layouts
-- [ ] Mobile input optimization
-- [ ] Mobile app (PWA enhancement)
+**Improvements:**
+- [x] Touch-friendly tap targets (min 44px)
+- [x] Touch scroll optimization
+- [x] Mobile input font size (prevent iOS zoom)
+- [x] Safe area insets for notched devices
+- [x] PWA meta tags (mobile-web-app-capable, viewport-fit)
 
 ---
 
 ### 9. User Preferences & Customization
-**Status:** ⚠️ BASIC THEME, MORE NEEDED  
-**Description:** Dark mode exists; other customizations missing  
+**Status:** ✅ IMPLEMENTED  
+**Description:** Preferences tab in Settings with format/currency/email options  
 **Impact:** LOW - Enhancement  
 
-**Missing Preferences:**
-- [ ] Column visibility preferences
-- [ ] Default view (list/grid)
-- [ ] Default date format
-- [ ] Currency/language settings
-- [ ] Notification preferences
-- [ ] Email frequency settings
+**Preferences:**
+- [x] Default view (list/grid)
+- [x] Default date format (short/medium/long/iso)
+- [x] Currency/language settings (ZAR/USD/EUR)
+- [x] Notification preferences (existing tab)
+- [x] Email frequency settings (instant/daily/weekly/none)
+- [ ] Column visibility preferences (structure in place)
 
 ---
 
 ## Summary by Priority
 
 ### 🔴 HIGH PRIORITY (Business Critical)
-1. Parts inventory company scoping
+1. Parts inventory company scoping ✅
 2. PayFast payment integration & webhooks
 3. User invitation system
 4. Appointment CRUD endpoints
@@ -1096,7 +1086,7 @@ export async function exportToExcel(data: any[], filename: string) {
 2. Warranty management CRUD
 3. Technician productivity reports
 4. Invoice payment tracking
-5. Subscription tier enforcement
+5. Subscription tier enforcement ✅
 6. Audit logging
 7. Voice command processing
 8. In-app notifications
@@ -1108,14 +1098,14 @@ export async function exportToExcel(data: any[], filename: string) {
 
 ### 🟢 LOW PRIORITY (Nice to Have)
 1. Mileage records persistence
-2. Job attachments full implementation
+2. Job attachments full implementation ✅
 3. Advanced analytics dashboards
 4. Customer lifetime value analytics
 5. Data export (CSV/Excel)
 6. Real-time sync features
-7. Mobile app enhancements
+7. Mobile app enhancements ✅
 8. Customer portal
-9. Advanced search & filters
+9. Advanced search & filters ✅
 
 **Estimated Effort:** 3-4 weeks
 

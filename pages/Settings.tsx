@@ -2,26 +2,29 @@ import React, { useState, useEffect } from 'react';
 import { 
   Building2, Save, RotateCcw, MapPin, Phone, Mail, Globe, 
   Clock, DollarSign, FileText, CreditCard, AlertCircle, CheckCircle2, X,
-  UserCircle, Key, Shield, Users, Loader2
+  UserCircle, Key, Shield, Users, Loader2, Bell, SlidersHorizontal
 } from 'lucide-react';
 import { companyProfile } from '../services/companyProfile';
 import { signInWithGoogle } from '../services/googleAuth';
 import { emailService } from '../services/emailService';
 import { AuthService } from '../services/auth';
 import { FirestoreService } from '../services/firestore';
-import { CompanyProfile, User, UserRole } from '../types';
+import { CompanyProfile, User, UserRole, Company, NotificationPreferences } from '../types';
 import { useAuth } from '../components/AuthContext';
+import { usePreferences } from '../components/PreferencesContext';
+import { store } from '../services/store';
 import { Permission, ROLE_LABELS, ROLE_COLORS, ROLE_DESCRIPTIONS } from '../services/rbac';
 
 export const Settings: React.FC = () => {
   const { can, user: currentUser } = useAuth();
+  const { preferences, updatePreferences } = usePreferences() || { preferences: null, updatePreferences: () => {} };
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthed, setIsAuthed] = useState(false);
   const [userUid, setUserUid] = useState<string | null>(null);
   const [profile, setProfile] = useState<CompanyProfile | null>(null);
   const [userProfile, setUserProfile] = useState<User | null>(null);
   const [saved, setSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState<'personal' | 'company' | 'banking' | 'hours' | 'invoice' | 'team'>('personal');
+  const [activeTab, setActiveTab] = useState<'personal' | 'company' | 'banking' | 'hours' | 'invoice' | 'team' | 'notifications' | 'preferences'>('personal');
   const [showResetModal, setShowResetModal] = useState(false);
   const [passwordResetSent, setPasswordResetSent] = useState(false);
   const [savingUser, setSavingUser] = useState(false);
@@ -29,6 +32,8 @@ export const Settings: React.FC = () => {
   const [teamMembers, setTeamMembers] = useState<User[]>([]);
   const [loadingTeam, setLoadingTeam] = useState(false);
   const [roleChanging, setRoleChanging] = useState<string | null>(null);
+  const [notificationPrefs, setNotificationPrefs] = useState<NotificationPreferences | null>(null);
+  const [savingPrefs, setSavingPrefs] = useState(false);
 
   // Sign-in state for unauthenticated UI
   const [signingIn, setSigningIn] = useState(false);
@@ -231,6 +236,11 @@ export const Settings: React.FC = () => {
     try {
       const { id, ...data } = userProfile;
       await AuthService.updateUser(userUid, data);
+      
+      if (notificationPrefs) {
+        await store.updateNotificationPreferences(notificationPrefs);
+      }
+
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (e) {
@@ -484,7 +494,7 @@ export const Settings: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-gray-200">
+      <div className="flex overflow-x-auto gap-2 border-b border-gray-200 hide-scrollbar scrollbar-hide">
         <button
           onClick={() => setActiveTab('personal')}
           className={`px-4 py-2 font-medium rounded-t-lg ${
@@ -533,7 +543,7 @@ export const Settings: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('invoice')}
-              className={`px-4 py-2 font-medium rounded-t-lg ${
+              className={`px-4 py-2 font-medium rounded-t-lg whitespace-nowrap ${
                 activeTab === 'invoice' 
                   ? 'bg-blue-600 text-white' 
                   : 'text-gray-600 hover:bg-gray-100'
@@ -541,6 +551,28 @@ export const Settings: React.FC = () => {
             >
               <FileText size={18} className="inline mr-2" />
               Invoice
+            </button>
+            <button
+              onClick={() => setActiveTab('notifications')}
+              className={`px-4 py-2 font-medium rounded-t-lg whitespace-nowrap ${
+                activeTab === 'notifications' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <Bell size={18} className="inline mr-2" />
+              Notifications
+            </button>
+            <button
+              onClick={() => setActiveTab('preferences')}
+              className={`px-4 py-2 font-medium rounded-t-lg whitespace-nowrap ${
+                activeTab === 'preferences' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <SlidersHorizontal size={18} className="inline mr-2" />
+              Preferences
             </button>
           </>
         )}
@@ -1219,6 +1251,188 @@ export const Settings: React.FC = () => {
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Notifications Tab */}
+      {activeTab === 'notifications' && notificationPrefs && (
+        <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-blue-100 p-2 rounded-lg">
+              <Bell className="text-blue-600" size={24} />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">Notification Preferences</h2>
+              <p className="text-sm text-gray-500">Choose how you want to be notified</p>
+            </div>
+          </div>
+
+          <div className="space-y-8">
+            {/* Delivery Methods */}
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">Delivery Methods</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="flex items-center gap-3">
+                    <Mail className="text-gray-400" size={20} />
+                    <div>
+                      <p className="font-medium text-gray-900">Email Notifications</p>
+                      <p className="text-xs text-gray-500">Receive summaries and important alerts</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer" 
+                      checked={notificationPrefs.email}
+                      onChange={(e) => setNotificationPrefs({...notificationPrefs, email: e.target.checked})}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-100">
+                  <div className="flex items-center gap-3">
+                    <Bell className="text-gray-400" size={20} />
+                    <div>
+                      <p className="font-medium text-gray-900">In-App Notifications</p>
+                      <p className="text-xs text-gray-500">Real-time alerts while using the app</p>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      className="sr-only peer" 
+                      checked={notificationPrefs.inApp}
+                      onChange={(e) => setNotificationPrefs({...notificationPrefs, inApp: e.target.checked})}
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Event Types */}
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-4">Event Subscriptions</h3>
+              <div className="space-y-3">
+                {[
+                  { id: 'jobUpdates', label: 'Job Updates', desc: 'When a job status changes or notes are added' },
+                  { id: 'inventoryAlerts', label: 'Inventory Alerts', desc: 'When stock levels for parts are low' },
+                  { id: 'customerMessages', label: 'Customer Messages', desc: 'When a customer sends a new message' },
+                  { id: 'systemAlerts', label: 'System Alerts', desc: 'Important platform updates and maintenance' },
+                  { id: 'marketingEmails', label: 'Marketing & News', desc: 'New feature announcements and newsletter' }
+                ].map((item) => (
+                  <div key={item.id} className="flex items-center justify-between p-4 bg-white border border-gray-200 rounded-xl hover:border-blue-200 hover:bg-blue-50/10 transition-all">
+                    <div>
+                      <p className="font-semibold text-gray-900">{item.label}</p>
+                      <p className="text-xs text-gray-500">{item.desc}</p>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        className="sr-only peer" 
+                        checked={notificationPrefs.events[item.id as keyof typeof notificationPrefs.events]}
+                        onChange={(e) => setNotificationPrefs({
+                          ...notificationPrefs, 
+                          events: {
+                            ...notificationPrefs.events,
+                            [item.id]: e.target.checked
+                          }
+                        })}
+                      />
+                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-6 border-t">
+            <button
+              onClick={handleSavePersonal}
+              disabled={savingUser}
+              className="flex items-center gap-2 px-6 py-2 text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            >
+              <Save size={18} />
+              {savingUser ? 'Saving...' : 'Save Preferences'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Preferences Tab */}
+      {activeTab === 'preferences' && preferences && (
+        <div className="bg-white rounded-xl shadow-sm p-6 space-y-6">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="bg-slate-100 p-2 rounded-lg">
+              <SlidersHorizontal className="text-slate-600" size={24} />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold">User Preferences</h2>
+              <p className="text-sm text-gray-500">Customize display and behavior</p>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Default View</label>
+              <select
+                value={preferences.defaultView}
+                onChange={(e) => updatePreferences({ defaultView: e.target.value as 'list' | 'grid' })}
+                className="w-full max-w-xs border rounded-lg px-3 py-2"
+              >
+                <option value="list">List</option>
+                <option value="grid">Grid</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Date Format</label>
+              <select
+                value={preferences.dateFormat}
+                onChange={(e) => updatePreferences({ dateFormat: e.target.value as any })}
+                className="w-full max-w-xs border rounded-lg px-3 py-2"
+              >
+                <option value="short">Short (M/D/YY)</option>
+                <option value="medium">Medium (Mon DD, YYYY)</option>
+                <option value="long">Long (Weekday, Month DD, YYYY)</option>
+                <option value="iso">ISO (YYYY-MM-DD)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Currency</label>
+              <select
+                value={preferences.currency}
+                onChange={(e) => {
+                  const sym = e.target.value === 'ZAR' ? 'R' : e.target.value === 'USD' ? '$' : '€';
+                  updatePreferences({ currency: e.target.value, currencySymbol: sym });
+                }}
+                className="w-full max-w-xs border rounded-lg px-3 py-2"
+              >
+                <option value="ZAR">ZAR (R)</option>
+                <option value="USD">USD ($)</option>
+                <option value="EUR">EUR (€)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Email Frequency</label>
+              <select
+                value={preferences.emailFrequency}
+                onChange={(e) => updatePreferences({ emailFrequency: e.target.value as any })}
+                className="w-full max-w-xs border rounded-lg px-3 py-2"
+              >
+                <option value="instant">Instant</option>
+                <option value="daily">Daily digest</option>
+                <option value="weekly">Weekly digest</option>
+                <option value="none">None</option>
+              </select>
+              <p className="text-xs text-gray-500 mt-1">How often to receive email summaries</p>
+            </div>
+          </div>
         </div>
       )}
 

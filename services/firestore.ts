@@ -201,5 +201,7 @@ export const Collections = {
     APPOINTMENTS: 'appointments',
     DIAGNOSTICS: 'diagnostics',
     WARRANTIES: 'warranties',
-    COMPANY_PROFILES: 'companyProfiles'
+    COMPANY_PROFILES: 'companyProfiles',
+    NOTIFICATIONS: 'notifications',
+    NOTIFICATION_PREFERENCES: 'notificationPreferences'
 } as const;

@@ -12,7 +12,11 @@ import { emailService } from './services/emailService';
 import { User, UserRole, Company } from './types';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { ThemeProvider } from './components/ThemeContext';
+import { PreferencesProvider } from './components/PreferencesContext';
+import { ToastProvider, useToast } from './components/ToastContext';
+import { notificationService } from './services/notificationService';
 import { Permission } from './services/rbac';
+import { initSyncService } from './services/syncService';
 
 // Lazy Load Pages
 const Dashboard = React.lazy(() => import('./pages/Dashboard').then(module => ({ default: module.Dashboard })));
@@ -32,9 +36,12 @@ const Companies = React.lazy(() => import('./pages/Companies'));
 const UsersManagement = React.lazy(() => import('./pages/UsersManagement'));
 const RolesPermissions = React.lazy(() => import('./pages/RolesPermissions'));
 const UserInvitations = React.lazy(() => import('./pages/UserInvitations') as Promise<{ default: React.ComponentType<any> }>);
+const SystemAdmin = React.lazy(() => import('./pages/SystemAdmin').then(m => ({ default: m.SystemAdmin })));
+const AuditLog = React.lazy(() => import('./pages/AuditLog').then(m => ({ default: m.AuditLog })));
 
 // Public Pages
 const AcceptInvitation = React.lazy(() => import('./pages/AcceptInvitation'));
+const CustomerPortal = React.lazy(() => import('./pages/CustomerPortal').then(m => ({ default: m.CustomerPortal })));
 
 /** Renders children only if user has permission, otherwise redirects to / */
 const ProtectedRoute: React.FC<{ permission: Permission; children: React.ReactNode }> = ({ permission, children }) => {
@@ -321,6 +328,7 @@ const App: React.FC = () => {
   const [selectedCompany, setSelectedCompany] = useState<string>("");
   const [storeReady, setStoreReady] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
+  const { showToast } = useToast();
 
   // Initialize Firestore-backed store on mount
   useEffect(() => {
@@ -336,6 +344,12 @@ const App: React.FC = () => {
       .catch(() => setCompanies([]));
   }, []);
 
+  // Initialize offline sync service
+  useEffect(() => {
+    const cleanup = initSyncService();
+    return cleanup;
+  }, []);
+
   // Check for session persistence
   useEffect(() => {
     const unsubscribe = AuthService.onAuthStateChange((user) => {
@@ -343,6 +357,11 @@ const App: React.FC = () => {
       setAuthChecked(true);
       // When user logs in, load company profile and prime the email service
       if (user) {
+        notificationService.connect(user.id);
+        notificationService.onNotification((n) => {
+          showToast(n.message, n.type as any);
+        });
+
         companyProfileService.getProfile()
           .then(profile => {
             emailService.setCompanyInfo({
@@ -371,21 +390,40 @@ const App: React.FC = () => {
 
 
   const handleLogout = async () => {
+    notificationService.disconnect();
     await AuthService.signOutUser();
     setUser(null);
   };
 
   if (!authChecked) {
-    // Wait for Firebase to restore session
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-4">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-        <p className="text-sm text-gray-400">Checking authentication…</p>
-      </div>
-    );
+    // Wait for Firebase to restore session (skip for portal - no auth needed)
+    const isPortal = typeof window !== 'undefined' && window.location.hash.startsWith('#/portal');
+    if (!isPortal) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-4">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+          <p className="text-sm text-gray-400">Checking authentication…</p>
+        </div>
+      );
+    }
   }
 
   if (!user) {
+    const isPortal = typeof window !== 'undefined' && window.location.hash.startsWith('#/portal');
+    if (isPortal) {
+      return (
+        <ThemeProvider>
+          <Router>
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div></div>}>
+              <Routes>
+                <Route path="/portal" element={<CustomerPortal />} />
+                <Route path="*" element={<Navigate to="/portal" replace />} />
+              </Routes>
+            </Suspense>
+          </Router>
+        </ThemeProvider>
+      );
+    }
     return <Login onLogin={handleLogin} companies={companies} selectedCompany={selectedCompany} setSelectedCompany={setSelectedCompany} />;
   }
 
@@ -400,39 +438,50 @@ const App: React.FC = () => {
 
   return (
     <ThemeProvider>
-      <AuthProvider user={user}>
-        <Router>
-          <Layout user={user} onLogout={handleLogout}>
-            <ErrorBoundary>
-              <Suspense fallback={<LoadingSpinner />}>
-                <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/jobs" element={<ProtectedRoute permission={Permission.VIEW_JOBS}><Jobs /></ProtectedRoute>} />
-                <Route path="/schedule" element={<ProtectedRoute permission={Permission.VIEW_SCHEDULE}><Schedule /></ProtectedRoute>} />
-                <Route path="/customers" element={<ProtectedRoute permission={Permission.VIEW_CUSTOMERS}><Customers /></ProtectedRoute>} />
-                <Route path="/vehicles" element={<ProtectedRoute permission={Permission.VIEW_VEHICLES}><Vehicles /></ProtectedRoute>} />
-                <Route path="/inventory" element={<ProtectedRoute permission={Permission.VIEW_INVENTORY}><Inventory /></ProtectedRoute>} />
-                <Route path="/diagnostics" element={<ProtectedRoute permission={Permission.RUN_DIAGNOSTICS}><Diagnostics /></ProtectedRoute>} />
-                <Route path="/ev-fleet" element={<ProtectedRoute permission={Permission.VIEW_EV_FLEET}><EVFleet /></ProtectedRoute>} />
-                <Route path="/sales" element={<ProtectedRoute permission={Permission.VIEW_INVOICES}><Sales /></ProtectedRoute>} />
-                <Route path="/analytics" element={<ProtectedRoute permission={Permission.VIEW_REPORTS}><Analytics /></ProtectedRoute>} />
-                <Route path="/settings" element={<ProtectedRoute permission={Permission.VIEW_SETTINGS}><Settings /></ProtectedRoute>} />
-                {/* System Admin Routes */}
-                <Route path="/admin/companies" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><Companies currentUser={user} /></ProtectedRoute>} />
-                <Route path="/admin/users" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><UsersManagement currentUser={user} /></ProtectedRoute>} />
-                <Route path="/admin/roles" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><RolesPermissions /></ProtectedRoute>} />
-                <Route path="/admin/invitations" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><UserInvitations /></ProtectedRoute>} />
-                {/* Public Routes */}
-                <Route path="/accept-invitation/:token" element={<AcceptInvitation />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </Routes>
-              </Suspense>
-            </ErrorBoundary>
-          </Layout>
-        </Router>
-      </AuthProvider>
+      <PreferencesProvider>
+      <ToastProvider>
+        <AuthProvider user={user}>
+          <Router>
+            <Layout user={user} onLogout={handleLogout}>
+              <ErrorBoundary>
+                <Suspense fallback={<LoadingSpinner />}>
+                  <Routes>
+                  <Route path="/portal" element={<CustomerPortal />} />
+                  <Route path="/" element={<Dashboard />} />
+                  <Route path="/jobs" element={<ProtectedRoute permission={Permission.VIEW_JOBS}><Jobs /></ProtectedRoute>} />
+                  <Route path="/schedule" element={<ProtectedRoute permission={Permission.VIEW_SCHEDULE}><Schedule /></ProtectedRoute>} />
+                  <Route path="/customers" element={<ProtectedRoute permission={Permission.VIEW_CUSTOMERS}><Customers /></ProtectedRoute>} />
+                  <Route path="/vehicles" element={<ProtectedRoute permission={Permission.VIEW_VEHICLES}><Vehicles /></ProtectedRoute>} />
+                  <Route path="/inventory" element={<ProtectedRoute permission={Permission.VIEW_INVENTORY}><Inventory /></ProtectedRoute>} />
+                  <Route path="/diagnostics" element={<ProtectedRoute permission={Permission.RUN_DIAGNOSTICS}><Diagnostics /></ProtectedRoute>} />
+                  <Route path="/ev-fleet" element={<ProtectedRoute permission={Permission.VIEW_EV_FLEET}><EVFleet /></ProtectedRoute>} />
+                  <Route path="/sales" element={<ProtectedRoute permission={Permission.VIEW_INVOICES}><Sales /></ProtectedRoute>} />
+                  <Route path="/analytics" element={<ProtectedRoute permission={Permission.VIEW_REPORTS}><Analytics /></ProtectedRoute>} />
+                  <Route path="/settings" element={<ProtectedRoute permission={Permission.VIEW_SETTINGS}><Settings /></ProtectedRoute>} />
+                  <Route path="/notifications" element={<NotificationsPage />} />
+                  {/* System Admin Routes */}
+                  <Route path="/admin/companies" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><Companies currentUser={user} /></ProtectedRoute>} />
+                  <Route path="/admin/users" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><UsersManagement currentUser={user} /></ProtectedRoute>} />
+                  <Route path="/admin/roles" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><RolesPermissions /></ProtectedRoute>} />
+                  <Route path="/admin/invitations" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><UserInvitations /></ProtectedRoute>} />
+                  <Route path="/admin/system" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><SystemAdmin /></ProtectedRoute>} />
+                  <Route path="/admin/audit" element={<ProtectedRoute permission={Permission.MANAGE_SYSTEM}><AuditLog /></ProtectedRoute>} />
+                  {/* Public Routes */}
+                  <Route path="/accept-invitation/:token" element={<AcceptInvitation />} />
+                    <Route path="*" element={<Navigate to="/" replace />} />
+                  </Routes>
+                </Suspense>
+              </ErrorBoundary>
+            </Layout>
+          </Router>
+        </AuthProvider>
+      </ToastProvider>
+      </PreferencesProvider>
     </ThemeProvider>
   );
 };
+
+// Lazy load the notifications page
+const NotificationsPage = React.lazy(() => import('./pages/Notifications'));
 
 export default App;

@@ -10,9 +10,13 @@ import { emailService } from '../services/emailService';
 import { messagingService } from '../services/messagingService';
 import { payfastService } from '../services/payfastService';
 import { PaymentHistory } from '../components/PaymentHistory';
-import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail, SlidersHorizontal, RefreshCw, AlertCircle } from 'lucide-react';
+import { FileText, Plus, Download, Search, X, Trash2, ArrowRight, CheckCircle, FileBadge, Car, User, Wrench, Printer, Eye, MoreVertical, Edit, Send, DollarSign, Loader2, CreditCard, Mail, SlidersHorizontal, RefreshCw, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Invoice, InvoiceItem, JobStatus, Job, Vehicle, Priority, Customer, CompanyProfile } from '../types';
 import { companyProfile as companyProfileService } from '../services/companyProfile';
+import { AdvancedFilterPanel } from '../components/ui/AdvancedFilterPanel';
+import { BulkActionPanel } from '../components/ui/BulkActionPanel';
+import { ExportDataModal } from '../components/ui/ExportDataModal';
+import { ExportColumn } from '../utils/exportUtils';
 
 export const Sales: React.FC = () => {
   const { can } = useAuth();
@@ -28,6 +32,10 @@ export const Sales: React.FC = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [filterDateFrom, setFilterDateFrom] = useState('');
+  const [filterDateTo, setFilterDateTo] = useState('');
+  const [selectedDocIds, setSelectedDocIds] = useState<string[]>([]);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
   // Modal States
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -237,6 +245,91 @@ export const Sales: React.FC = () => {
       case 'Overdue': return 'bg-red-100 text-red-800';
       case 'Rejected': return 'bg-red-100 text-red-800';
       default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  const handleBulkDelete = () => {
+    if (confirm(`Are you sure you want to delete ${selectedDocIds.length} items?`)) {
+      selectedDocIds.forEach(id => store.deleteInvoice(id));
+      setSelectedDocIds([]);
+      refreshData();
+    }
+  };
+
+  const handleBulkStatusChange = (status: string) => {
+    if (confirm(`Change status of ${selectedDocIds.length} items to ${status}?`)) {
+      selectedDocIds.forEach(id => {
+        const doc = salesDocs.find(d => d.id === id);
+        if (doc) store.updateInvoice(id, { status: status as any });
+      });
+      setSelectedDocIds([]);
+      refreshData();
+    }
+  };
+
+  const handleBulkSendEmail = async () => {
+    if (selectedDocIds.length === 0) return;
+
+    if (
+      !confirm(
+        `Send ${activeTab === 'Invoice' ? 'invoices' : 'quotes'} via email for ${selectedDocIds.length} selected documents and mark them as Sent?`
+      )
+    ) {
+      return;
+    }
+
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const id of selectedDocIds) {
+      const doc = salesDocs.find(d => d.id === id);
+      if (!doc) continue;
+      const customer = customers.find(c => c.id === doc.customerId);
+
+      if (!customer?.email) {
+        failureCount++;
+        continue;
+      }
+
+      try {
+        const isQuote = doc.type === 'Quote';
+        const result = await emailService.sendInvoice(
+          customer.email,
+          customer.name,
+          doc.number,
+          doc.total,
+          doc.dueDate,
+          isQuote
+        );
+        if (result.success) {
+          successCount++;
+          store.updateInvoice(doc.id, { status: 'Sent' });
+        } else {
+          failureCount++;
+        }
+      } catch {
+        failureCount++;
+      }
+    }
+
+    setSelectedDocIds([]);
+    refreshData();
+
+    alert(
+      `Bulk email complete.\nSuccessfully sent: ${successCount}\nFailed or skipped (no email): ${failureCount}`
+    );
+  };
+
+  const handleBulkDownloadPDFs = async () => {
+    if (selectedDocIds.length === 0) return;
+
+    if (!confirm(`Download PDFs for ${selectedDocIds.length} selected documents?`)) return;
+
+    for (const id of selectedDocIds) {
+      const doc = salesDocs.find(d => d.id === id);
+      if (doc) {
+        await handleDownloadPDF(doc);
+      }
     }
   };
 
@@ -496,6 +589,9 @@ export const Sales: React.FC = () => {
       description: quote.items.map(i => i.description).join(', '),
       notes: `Created from Quote ${quote.number}`,
       estimatedCost: quote.subtotal,
+      estimatedHours: 0,
+      actualHours: 0,
+      timeVariance: 0,
       createdAt: new Date().toISOString(),
       dueDate: new Date(Date.now() + 7 * 86400000).toISOString(),
       tasks: [],
@@ -535,7 +631,10 @@ export const Sales: React.FC = () => {
   const clearFilters = () => {
     setSearch('');
     setFilterStatus('ALL');
+    setFilterDateFrom('');
+    setFilterDateTo('');
     setCurrentPage(1);
+    setSelectedDocIds([]);
   };
 
   if (isLoading) {
@@ -551,20 +650,60 @@ export const Sales: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      <ExportDataModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        data={filteredDocs}
+        availableColumns={[
+          { header: 'Invoice Number', key: 'number' },
+          { header: 'Type', key: 'type' },
+          { header: 'Status', key: 'status' },
+          { header: 'Customer', key: 'customerId', format: (id) => customers.find(c => c.id === id)?.name || id },
+          { header: 'Vehicle', key: 'vehicleId', format: (id) => { const v = vehicles.find(v => v.id === id); return v ? `${v.registration}` : 'None'; } },
+          { header: 'Issue Date', key: 'issueDate', format: (d) => new Date(d).toLocaleDateString() },
+          { header: 'Due Date', key: 'dueDate', format: (d) => new Date(d).toLocaleDateString() },
+          { header: 'Subtotal', key: 'subtotal' },
+          { header: 'Tax', key: 'taxAmount' },
+          { header: 'Total', key: 'total' }
+        ]}
+        filename={`${activeTab.toLowerCase()}s_export`}
+        defaultExportType="excel"
+      />
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Sales & Quotes</h1>
           <p className="text-sm text-gray-500">Manage invoicing, quotations, and sales history</p>
         </div>
-        <button
-          onClick={() => handleCreate(activeTab)}
-          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          disabled={!can(Permission.MANAGE_INVOICES)}
-          title={!can(Permission.MANAGE_INVOICES) ? 'You do not have permission' : ''}
-        >
-          <Plus size={20} /> Create {activeTab}
-        </button>
+        <div className="flex items-center gap-2">
+            <button
+                onClick={() => setIsExportModalOpen(true)}
+                className="bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm"
+            >
+                <Download size={20} /> Export
+            </button>
+            <button
+            onClick={() => handleCreate(activeTab)}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            disabled={!can(Permission.MANAGE_INVOICES)}
+            title={!can(Permission.MANAGE_INVOICES) ? 'You do not have permission' : ''}
+            >
+            <Plus size={20} /> Create {activeTab}
+            </button>
+        </div>
       </div>
+
+      <BulkActionPanel 
+        selectedCount={selectedDocIds.length}
+        onClearSelection={() => setSelectedDocIds([])}
+        actions={[
+          { label: 'Mark Sent', icon: <Send size={16} />, onClick: () => handleBulkStatusChange('Sent'), variant: 'primary' },
+          { label: 'Mark Paid/Accepted', icon: <CheckCircle2 size={16} />, onClick: () => handleBulkStatusChange(activeTab === 'Invoice' ? 'Paid' : 'Accepted'), variant: 'primary' },
+          { label: 'Send Email', icon: <Mail size={16} />, onClick: handleBulkSendEmail, variant: 'primary' },
+          { label: 'Download PDFs', icon: <Download size={16} />, onClick: handleBulkDownloadPDFs, variant: 'secondary' },
+          { label: 'Delete', icon: <Trash2 size={16} />, onClick: handleBulkDelete, variant: 'danger' }
+        ]}
+      />
 
       {/* Tabs */}
       <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg w-fit">
@@ -628,75 +767,48 @@ export const Sales: React.FC = () => {
           </h3>
         </div>
       </div>
+      
+      <AdvancedFilterPanel
+        searchTerm={search}
+        onSearchChange={(v) => { setSearch(v); setCurrentPage(1); }}
+        onClearFilters={clearFilters}
+        placeholder={`Search ${activeTab} # or Customer...`}
+        filters={[
+          {
+            id: 'status',
+            label: 'Status',
+            value: filterStatus,
+            onChange: (v) => { setFilterStatus(v); setCurrentPage(1); },
+            options: [
+              { label: 'All Statuses', value: 'ALL' },
+              ...statusOptions.map(status => ({ label: status, value: status }))
+            ]
+          }
+        ]}
+        presets={[
+          { label: 'Overdue / Rejected', active: filterStatus === 'Overdue' || filterStatus === 'Rejected', onClick: () => { setFilterStatus(activeTab === 'Invoice' ? 'Overdue' : 'Rejected'); setCurrentPage(1); } },
+          { label: 'Paid / Accepted', active: filterStatus === 'Paid' || filterStatus === 'Accepted', onClick: () => { setFilterStatus(activeTab === 'Invoice' ? 'Paid' : 'Accepted'); setCurrentPage(1); } }
+        ]}
+      />
 
       {/* Table */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-4 border-b border-gray-200">
-          <div className="flex flex-col lg:flex-row gap-4">
-            {/* Search */}
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-              <input
-                type="text"
-                placeholder={`Search ${activeTab} # or Customer...`}
-                className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-blue-300 outline-none transition-all"
-                value={search}
-                onChange={e => { setSearch(e.target.value); setCurrentPage(1); }}
-              />
-            </div>
-            {/* Status Filter */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1.5 text-sm text-gray-500 mr-1">
-                <SlidersHorizontal size={16} />
-                {activeFilterCount > 0 && (
-                  <span className="bg-blue-600 text-white text-xs font-bold w-5 h-5 rounded-full flex items-center justify-center">{activeFilterCount}</span>
-                )}
-              </div>
-              <div className="flex items-center bg-gray-50 rounded-lg border border-gray-200 p-0.5">
-                <button
-                  onClick={() => { setFilterStatus('ALL'); setCurrentPage(1); }}
-                  className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                    filterStatus === 'ALL' ? 'bg-white text-blue-700 shadow-sm border border-blue-200' : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  All
-                </button>
-                {statusOptions.map(status => (
-                  <button
-                    key={status}
-                    onClick={() => { setFilterStatus(status); setCurrentPage(1); }}
-                    className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                      filterStatus === status
-                        ? 'bg-white shadow-sm border ' + (
-                            status === 'Paid' || status === 'Accepted' ? 'text-green-700 border-green-200' :
-                            status === 'Overdue' || status === 'Rejected' ? 'text-red-700 border-red-200' :
-                            status === 'Sent' ? 'text-blue-700 border-blue-200' :
-                            status === 'Converted' ? 'text-purple-700 border-purple-200' :
-                            'text-gray-700 border-gray-200'
-                          )
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    {status}
-                  </button>
-                ))}
-              </div>
-              {activeFilterCount > 0 && (
-                <button
-                  onClick={clearFilters}
-                  className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                >
-                  <X size={14} /> Clear
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
+                <th className="px-6 py-3 text-center w-12">
+                  <input
+                    type="checkbox"
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    checked={selectedDocIds.length === filteredDocs.length && filteredDocs.length > 0}
+                    ref={input => { if (input) input.indeterminate = selectedDocIds.length > 0 && selectedDocIds.length < filteredDocs.length; }}
+                    onChange={e => {
+                      if (e.target.checked) setSelectedDocIds(filteredDocs.map(d => d.id));
+                      else setSelectedDocIds([]);
+                    }}
+                  />
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Number</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer / Vehicle</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
@@ -710,9 +822,20 @@ export const Sales: React.FC = () => {
                 const customer = customers.find(c => c.id === doc.customerId);
                 const vehicle = vehicles.find(v => v.id === doc.vehicleId);
                 return (
-                  <tr key={doc.id} className="hover:bg-gray-50">
+                  <tr key={doc.id} className={`hover:bg-blue-50/50 transition-colors ${selectedDocIds.includes(doc.id) ? 'bg-blue-50/50' : ''}`}>
+                    <td className="px-6 py-4 text-center">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        checked={selectedDocIds.includes(doc.id)}
+                        onChange={e => {
+                          if (e.target.checked) setSelectedDocIds([...selectedDocIds, doc.id]);
+                          else setSelectedDocIds(selectedDocIds.filter(id => id !== doc.id));
+                        }}
+                      />
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap font-medium text-blue-600 cursor-pointer" onClick={() => handleView(doc)}>{doc.number}</td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-6 py-4 whitespace-nowrap cursor-pointer" onClick={() => handleView(doc)}>
                       <div className="text-sm font-medium text-gray-900">{customer?.name || 'Unknown'}</div>
                       {vehicle && <div className="text-xs text-gray-500">{vehicle.make} {vehicle.model} ({vehicle.registration})</div>}
                     </td>

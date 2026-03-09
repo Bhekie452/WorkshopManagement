@@ -12,8 +12,6 @@ export const VoiceAssistant: React.FC = () => {
   const [response, setResponse] = useState('');
   const navigate = useNavigate();
 
-  // Simple simulated voice command processing
-  // Log command to backend
   const logVoiceCommand = async (command_text: string, response_text: string, success = true, context = '') => {
     try {
       await fetch(VOICE_API_URL, {
@@ -24,38 +22,45 @@ export const VoiceAssistant: React.FC = () => {
     } catch {}
   };
 
-  const processCommand = (cmd: string) => {
-    const lowerCmd = cmd.toLowerCase();
-    
-    let reply = "I didn't quite catch that. Try saying 'Go to Jobs' or 'Open Inventory'.";
-    let context = '';
-    if (lowerCmd.includes('dashboard') || lowerCmd.includes('home')) {
-      navigate('/');
-      reply = 'Navigating to Dashboard.';
-      context = 'dashboard';
-    } else if (lowerCmd.includes('jobs') || lowerCmd.includes('job card')) {
-      navigate('/jobs');
-      reply = 'Opening Job Management.';
-      context = 'jobs';
-    } else if (lowerCmd.includes('inventory') || lowerCmd.includes('parts')) {
-      navigate('/inventory');
-      reply = 'Opening Inventory.';
-      context = 'inventory';
-    } else if (lowerCmd.includes('calendar') || lowerCmd.includes('schedule')) {
-      navigate('/schedule');
-      reply = 'Opening Calendar.';
-      context = 'schedule';
-    } else if (lowerCmd.includes('invoices') || lowerCmd.includes('billing')) {
-      navigate('/sales');
-      reply = 'Opening Invoices.';
-      context = 'invoices';
-    } else if (lowerCmd.includes('customer')) {
-      navigate('/customers');
-      reply = 'Opening Customer Database.';
-      context = 'customers';
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const processCommand = async (cmd: string) => {
+    setIsProcessing(true);
+    try {
+      const resp = await fetch('/api/voice/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript: cmd }),
+      });
+
+      if (!resp.ok) throw new Error('Voice processing failed');
+      
+      const data = await resp.json();
+      const { text, action } = data;
+
+      setResponse(text);
+      speak(text);
+
+      if (action) {
+        if (action.type === 'NAVIGATION') {
+          navigate(action.payload.path);
+        } else if (action.type === 'DATA_UPDATE') {
+          // If needed, we could trigger a global data refresh here
+          console.log('Voice action: data update', action.payload);
+        }
+      }
+
+      logVoiceCommand(cmd, text, true, action?.type || 'unknown');
+      return text;
+    } catch (err) {
+      const errorMsg = "I'm having trouble connecting to my brain right now.";
+      setResponse(errorMsg);
+      speak(errorMsg);
+      logVoiceCommand(cmd, errorMsg, false, 'error');
+      return errorMsg;
+    } finally {
+      setIsProcessing(false);
     }
-    logVoiceCommand(cmd, reply, reply.indexOf('Opening') === 0 || reply.indexOf('Navigating') === 0, context);
-    return reply;
   };
 
   const toggleListening = () => {
@@ -79,12 +84,10 @@ export const VoiceAssistant: React.FC = () => {
       recognition.interimResults = false;
       recognition.lang = 'en-US';
 
-      recognition.onresult = (event: any) => {
+      recognition.onresult = async (event: any) => {
         const text = event.results[0][0].transcript;
         setTranscript(text);
-        const reply = processCommand(text);
-        setResponse(reply);
-        speak(reply);
+        await processCommand(text);
         setIsListening(false);
       };
 
@@ -96,11 +99,10 @@ export const VoiceAssistant: React.FC = () => {
       recognition.start();
     } else {
       // Fallback for browsers without API support (Simulation)
-      setTimeout(() => {
+      setTimeout(async () => {
         const simulatedText = "Go to Jobs";
         setTranscript(simulatedText);
-        const reply = processCommand(simulatedText);
-        setResponse(reply);
+        await processCommand(simulatedText);
         setIsListening(false);
       }, 2000);
     }
@@ -150,6 +152,13 @@ export const VoiceAssistant: React.FC = () => {
               <Mic size={32} />
             </div>
             <p className="text-gray-500 font-medium">Listening...</p>
+          </div>
+        ) : isProcessing ? (
+          <div className="flex flex-col items-center">
+            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 mb-4 animate-spin">
+              <Command size={32} />
+            </div>
+            <p className="text-gray-500 font-medium">Processing...</p>
           </div>
         ) : (
           <div className="flex flex-col items-center w-full">

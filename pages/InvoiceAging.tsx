@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../components/AuthContext';
 import { LoadingSpinner } from '../components/ui/LoadingSpinner';
 import { EmptyState } from '../components/ui/EmptyState';
 import { Button } from '../components/ui/Button';
@@ -34,7 +33,6 @@ interface AgingReport {
 }
 
 export default function InvoiceAging() {
-  const { currentUser } = useAuth();
   const [report, setReport] = useState<AgingReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,12 +48,7 @@ export default function InvoiceAging() {
       setLoading(true);
       setError(null);
 
-      const response = await ApiCall.get('/api/analytics/invoices/aging');
-      if (!response.ok) {
-        throw new Error('Failed to fetch aging report');
-      }
-
-      const data = await response.json();
+      const data = await ApiCall.get<AgingReport>('/api/analytics/invoices/aging');
       setReport(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -138,11 +131,10 @@ export default function InvoiceAging() {
       <EmptyState
         title="No Overdue Invoices"
         description="Great news! All invoices are paid or not yet due."
-        action={
-          <Button onClick={fetchAgingReport} variant="secondary">
-            Refresh
-          </Button>
-        }
+        action={{
+          label: 'Refresh',
+          onClick: fetchAgingReport,
+        }}
       />
     );
   }
